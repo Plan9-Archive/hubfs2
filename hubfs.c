@@ -387,7 +387,11 @@ fsopen(Req *r)
 	q->nxt = h->bucket;
 	q->bufuse = 0;
 	r->fid->aux = q;
-	if(h && ((r->ifcall.mode&OTRUNC) || (trunc == 1))){
+	if (trunc == 1){
+		q->nxt = h->inbuckp;
+		q->bufuse = h->buckfull;
+	}
+	if(h && (r->ifcall.mode&OTRUNC)){
 		h->inbuckp = h->bucket;
 		h->buckfull = 0;
 		r->fid->file->length = 0;
