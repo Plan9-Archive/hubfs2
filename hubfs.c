@@ -56,7 +56,6 @@ struct Msgq{
 char *srvname;
 int paranoia;					/* In paranoid mode loose reader/writer sync is maintained */
 int freeze;						/* In frozen mode the hubs operate simply as a ramfs */
-int trunc;						/* In trunc mode clients auto-truncate files when opened */
 
 static char Ebad[] = "something bad happened";
 static char Enomem[] = "no memory";
@@ -267,8 +266,14 @@ fsread(Req *r)
 	if(freeze == UP){
 		mq = r->fid->aux;
 		if(mq->bufuse > 0){
-			if(h->qrnum >= MAXQ -2){
-				h->qrnum = 1;
+			if(h->qrnum >= MAXQ - 2){
+				j = 1;
+				for(i = h->qrans; i <= h->qrnum; i++) {
+					h->qreqs[j] = h->qreqs[i];
+					h->rstatus[j] = h->rstatus[i];
+					j++;
+				}
+				h->qrnum = h->qrnum - h->qrans + 1;
 				h->qrans = 1;
 			}
 			h->qrnum++;
@@ -319,6 +324,8 @@ fswrite(Req *r)
 	Hub *h;
 	u32int count;
 	vlong offset;
+	int i;
+	int j;
 
 	h = r->fid->file->aux;
 	if(strncmp(h->name, "ctl", 3) == 0){
@@ -346,12 +353,17 @@ fswrite(Req *r)
 		return;
 	}
 	/* Actual queue logic here */
-	h->qwnum++;
 	if(h->qwnum >= MAXQ - 2){
-		msgsend(h);
-		h->qwnum = 1;
+		j = 1;
+		for(i = h->qwans; i <= h->qwnum; i++) {
+			h->qwrits[j] = h->qwrits[i];
+			h->wstatus[j] = h->wstatus[i];
+			j++;
+		}
+		h->qwnum = h->qwnum - h->qwans + 1;
 		h->qwans = 1;
 	}
+	h->qwnum++;
 	h->wstatus[h->qwnum] = WAIT;
 	h->qwrits[h->qwnum] = r;
 	wrsend(h);
@@ -395,10 +407,6 @@ fsopen(Req *r)
 	q->nxt = h->bucket;
 	q->bufuse = 0;
 	r->fid->aux = q;
-	if (trunc == 1){
-		q->nxt = h->inbuckp;
-		q->bufuse = h->buckfull;
-	}
 	if(h && (r->ifcall.mode&OTRUNC)){
 		h->inbuckp = h->bucket;
 		h->buckfull = 0;
@@ -480,7 +488,6 @@ main(int argc, char **argv)
 	srvname = nil;
 	fs.tree = alloctree(nil, nil, DMDIR|0777, fsdestroyfile);
 	q = fs.tree->root->qid;
-	trunc = 0;
 
 	ARGBEGIN{
 	case 'D':
@@ -494,9 +501,6 @@ main(int argc, char **argv)
 		break;
 	case 'm':
 		mtpt = EARGF(usage());
-		break;
-	case 't':
-		trunc = 1;
 		break;
 	default:
 		usage();
