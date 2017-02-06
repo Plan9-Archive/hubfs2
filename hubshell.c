@@ -23,7 +23,10 @@ struct Shell {
 };
 
 char initname[SMBUF];
+char hubdir[SMBUF];
 char srvname[SMBUF];
+char ctlname[SMBUF];
+char basehub[SMBUF];
 int fortunate;
 int echoes;
 
@@ -48,6 +51,7 @@ setupshell(char *name)
 	}
 	memset(s, 0, sizeof(Shell));
 	strncat(s->basename, name, SMBUF);
+	fprint(2, "setupshell %s\n", s->basename);
 	for(i = 1; i < 3; i++){
 		s->fdname[i] = (char*)malloc((strlen(s->basename)+1));
 		if(s->fdname[i] == nil){
@@ -68,6 +72,10 @@ setupshell(char *name)
 		fprint(2, "hubshell: giving up on task - cant open %s\n", s->fdname[0]);
 		return(nil);
 	}
+//	sprint(basehub, s->fdname[0] + strspn(s->fdname[0], hubdir));
+	sprint(basehub, s->fdname[0] + strlen(hubdir));
+	fprint(2, "fdname[0] is %s\n", s->fdname[0]);
+	fprint(2, "basehub is %s\n", basehub);
 	s->fdzerodelay = 0;
 	s->fdonedelay = 0;
 	s->fdtwodelay = 30;
@@ -142,7 +150,10 @@ fdzerocat(int infd, int outfd, Shell *s)
 {
 	char buf[8192];
 	long n;
+	char ctlbuf[8192];
+	int ctlfd;
 
+readloop:
 	while((n=read(infd, buf, (long)sizeof(buf)))>0){
 		if((strncmp(buf, "%", 1)) == 0){
 			s->cmdresult = 'p';
@@ -161,7 +172,17 @@ fdzerocat(int infd, int outfd, Shell *s)
 		}
 	}
 	if(n == 0){
-		fprint(2, "hubshell: zero length read on fd %d\n", infd);
+//		fprint(2, "hubshell: zero length read on fd %d\n", infd);
+		if((ctlfd = open(ctlname, OWRITE)) == - 1){
+			fprint(2, "hubshell: can't open ctl file\n");
+			goto readloop;
+		}
+		sprint(ctlbuf, "eof %s\n", basehub);
+//		fprint(2, "ctlbuf is %s", ctlbuf);
+		write(ctlfd, ctlbuf, strlen(ctlbuf) +1);
+		close(ctlfd);
+		goto readloop;
+
 	}
 	if(n < 0){
 		fprint(2, "hubshell: error reading fd %d\n", infd);
@@ -201,6 +222,9 @@ parsebuf(Shell *s, char *buf, int outfd)
 	memset(tmpstr, 0, SMBUF);
 	memset(tmpname, 0, SMBUF);
 	int i;
+	char ctlbuf[8192];
+	int ctlfd;
+	int n;
 
 	if(strncmp(buf, "detach", 6) == 0){
 		fprint(2, "hubshell detaching\n");
@@ -371,6 +395,21 @@ parsebuf(Shell *s, char *buf, int outfd)
 		echoes = 0;
 		return;
 	}
+	if(strncmp(buf, "eof", 3) == 0){
+//		fprint(2, "hubshell: sending eof to basehub %s\n", basehub);
+//		fprint(2, "ctlname is %s\n", ctlname);
+		if((ctlfd = open(ctlname, OWRITE)) == - 1){
+			fprint(2, "hubshell: can't open ctl file\n");
+			return;
+		}
+		sprint(ctlbuf, "eof %s\n", basehub);
+//		fprint(2, "ctlbuf is %s", ctlbuf);
+		n=write(ctlfd, ctlbuf, strlen(ctlbuf) +1);
+			if(n != strlen(ctlbuf) + 1)
+				fprint(2, "hubshell: error writing to %s on fd %d\n", ctlname, ctlfd);
+		close(ctlfd);
+		return;
+	}
 
 	fprint(2, "hubshell %% commands: \n\tdetach, remote NAME, local NAME, attach NAME \n\tstatus, list, err TIME, in TIME, out TIME\n");
 	s->cmdresult = 'x';
@@ -391,6 +430,15 @@ main(int argc, char *argv[])
 	strncpy(initname, argv[1], SMBUF);
 	strncat(srvname, initname+3, SMBUF);
 	sprint(srvname + strcspn(srvname, "/"), "\0");
+	fprint(2, "srvname is %s\n", srvname);
+	sprint(hubdir, "/n/");
+	strncat(hubdir, srvname, SMBUF-6);
+	strcat(hubdir, "/");
+	fprint(2, "hubdir is %s\n", hubdir);
+	sprint(ctlname, "/n/");
+	strncat(ctlname, srvname, SMBUF-6);
+	strcat(ctlname, "/ctl");
+	fprint(2, "ctlname is %s\n", ctlname);
 
 	s = setupshell(initname);
 	if(s == nil){
