@@ -491,80 +491,64 @@ hubcmd(char *cmd)
 	char cmdbuf[256];
 	
 	if(strncmp(cmd, "quit", 4) == 0){
-		sysfatal("quit command sent to hubfs!");
+		sysfatal("hubfs: quit command received");
 	}
 	if(strncmp(cmd, "fear", 4) == 0){
 		paranoia = UP;
-		print("you feel a cold creeping feeling coming up your spine...\n");
+		fprint(2, "hubfs: paranoid mode activated\n");
 		return;
 	}
 	if(strncmp(cmd, "calm", 4) == 0){
 		paranoia = DOWN;
-		print("you feel relaxed and confident.\n");
+		fprint(2, "hubfs: non-paranoid mode resumed\n");
 		return;
 	}
 	if(strncmp(cmd, "freeze", 6) == 0){
 		freeze = UP;
-		print("the pipes freeze in place!\n");
+		fprint(2, "hubfs: the pipes freeze in place\n");
 		return;
 	}
 	if(strncmp(cmd, "melt", 4) == 0){
 		freeze = DOWN;
-		print("the pipes thaw and data flows freely again\n");
+		fprint(2, "hubfs: the pipes thaw\n");
 		return;
 	}
 	if(strncmp(cmd, "eof", 3) == 0){
 		endoffile = UP;
 		if(strlen(cmd) > 4){
 			i=0;
-			while(isalpha(*(cmd+i+4))){
+			while(isalnum(*(cmd+i+4))){
 				cmdbuf[i]=*(cmd+i+4);
 				i++;
 			}
 			cmdbuf[i] = '\0';
 			eofhub(cmdbuf);
-/*
-			for(i=5;i<256;i++){
-				if(cmd+i=="\n")
-					sprint(cmd+i,"");
-				if(i==255)
-					sprint(cmd+i,"");
-				if(!isalpha(*(cmd+i)))
-					sprint(cmd+i,"");
-			}
-			eofhub(cmd+4);
-*/
 			endoffile = DOWN;
 			return;
 		}
-		print("sending end of file to all client readers\n");
+		fprint(2, "hubfs: sending end of file to all client readers\n");
 		eofall();
-		return;
-	}
-	if(strncmp(cmd, "bloc", 4) == 0){
 		endoffile = DOWN;
-		print("removing eof message for readers\n");
 		return;
 	}
-	fprint(2, "no matching command found\n");
+	fprint(2, "hubfs: no matching command found\n");
 }
 
 void
 eofhub(char *target){
 	Hublist* currenthub;
-	print("eof to hub %s\n", target);
 	currenthub = firsthublist;
 	if(currenthub->targethub == nil)
 		return;
 	if(strcmp(target, currenthub->hubname) == 0){
-		print("eof to %s\n", currenthub->hubname);
+		fprint(2, "hubfs: eof to %s\n", currenthub->hubname);
 		msgsend(currenthub->targethub);
 		return;
 	}
 	while(currenthub->nexthub->targethub != nil){
 		currenthub=currenthub->nexthub;
 		if(strcmp(target, currenthub->hubname) == 0){
-			print("eof to %s\n", currenthub->hubname);
+			fprint(2, "hubfs: eof to %s\n", currenthub->hubname);
 			msgsend(currenthub->targethub);
 			return;
 		}
@@ -577,11 +561,9 @@ eofall(){
 	currenthub = firsthublist;
 	if(currenthub->targethub == nil)
 		return;
-	print("eof to %s\n", currenthub->hubname);
 	msgsend(currenthub->targethub);
 	while(currenthub->nexthub->targethub != nil){
 		currenthub=currenthub->nexthub;
-		print("eof to %s\n", currenthub->hubname);
 		msgsend(currenthub->targethub);
 	}
 }
