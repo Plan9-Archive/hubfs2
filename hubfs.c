@@ -57,6 +57,7 @@ char *srvname;
 int paranoia;					/* In paranoid mode loose reader/writer sync is maintained */
 int freeze;						/* In frozen mode the hubs operate simply as a ramfs */
 int trunc;						/* In trunc mode clients auto-truncate files when opened */
+int endoffile;					/* Send zero length end of file read to all clients */
 
 static char Ebad[] = "something bad happened";
 static char Enomem[] = "no memory";
@@ -142,6 +143,8 @@ msgsend(Hub *h)
 		/* Done with wraparound checks, now we can send the data */
 		memmove(r->ofcall.data, mq->nxt, count);
 		r->ofcall.count = count;
+		if(endoffile == UP)
+			r->ofcall.count = 0;
 		mq->nxt += count;
 		mq->bufuse += count;
 		h->rstatus[i] = DONE;
@@ -475,6 +478,16 @@ hubcmd(char *cmd)
 		print("the pipes thaw and data flows freely again\n");
 		return;
 	}
+	if(strncmp(cmd, "eof", 3) == 0){
+		endoffile = UP;
+		print("sending end of file to all client readers\n");
+		return;
+	}
+	if(strncmp(cmd, "bloc", 4) == 0){
+		endoffile = DOWN;
+		print("removing eof message for readers\n");
+		return;
+	}
 	fprint(2, "no matching command found\n");
 }
 
@@ -495,6 +508,7 @@ main(int argc, char **argv)
 	fs.tree = alloctree(nil, nil, DMDIR|0777, fsdestroyfile);
 	q = fs.tree->root->qid;
 	trunc = 0;
+	endoffile = DOWN;
 
 	ARGBEGIN{
 	case 'D':
