@@ -4,6 +4,7 @@
 #include <fcall.h>
 #include <thread.h>
 #include <9p.h>
+#include <ctype.h>
 
 /* provides input/output multiplexing for 'screen' like functionality */
 /* usually used in combination with hubshell client and hub wrapper script */
@@ -77,6 +78,8 @@ void hubcmd(char *cmd);
 void zerohub(Hub *h);
 void addhub(Hub *h);
 void eofall(void);
+void eofhub(char *target);
+
 void fsread(Req *r);
 void fswrite(Req *r);
 void fscreate(Req *r);
@@ -484,6 +487,9 @@ addhub(Hub *h)
 void
 hubcmd(char *cmd)
 {
+	int i;
+	char cmdbuf[256];
+	
 	if(strncmp(cmd, "quit", 4) == 0){
 		sysfatal("quit command sent to hubfs!");
 	}
@@ -509,6 +515,28 @@ hubcmd(char *cmd)
 	}
 	if(strncmp(cmd, "eof", 3) == 0){
 		endoffile = UP;
+		if(strlen(cmd) > 4){
+			i=0;
+			while(isalpha(*(cmd+i+4))){
+				cmdbuf[i]=*(cmd+i+4);
+				i++;
+			}
+			cmdbuf[i] = '\0';
+			eofhub(cmdbuf);
+/*
+			for(i=5;i<256;i++){
+				if(cmd+i=="\n")
+					sprint(cmd+i,"");
+				if(i==255)
+					sprint(cmd+i,"");
+				if(!isalpha(*(cmd+i)))
+					sprint(cmd+i,"");
+			}
+			eofhub(cmd+4);
+*/
+			endoffile = DOWN;
+			return;
+		}
 		print("sending end of file to all client readers\n");
 		eofall();
 		return;
@@ -522,12 +550,34 @@ hubcmd(char *cmd)
 }
 
 void
+eofhub(char *target){
+	Hublist* currenthub;
+	print("eof to hub %s\n", target);
+	currenthub = firsthublist;
+	if(currenthub->targethub == nil)
+		return;
+	if(strcmp(target, currenthub->hubname) == 0){
+		print("eof to %s\n", currenthub->hubname);
+		msgsend(currenthub->targethub);
+		return;
+	}
+	while(currenthub->nexthub->targethub != nil){
+		currenthub=currenthub->nexthub;
+		if(strcmp(target, currenthub->hubname) == 0){
+			print("eof to %s\n", currenthub->hubname);
+			msgsend(currenthub->targethub);
+			return;
+		}
+	}
+}	
+
+void
 eofall(){
 	Hublist* currenthub;
 	currenthub = firsthublist;
 	if(currenthub->targethub == nil)
 		return;
-	print("eof to %s", currenthub->hubname);
+	print("eof to %s\n", currenthub->hubname);
 	msgsend(currenthub->targethub);
 	while(currenthub->nexthub->targethub != nil){
 		currenthub=currenthub->nexthub;
@@ -535,7 +585,6 @@ eofall(){
 		msgsend(currenthub->targethub);
 	}
 }
-		
 
 void
 usage(void)
