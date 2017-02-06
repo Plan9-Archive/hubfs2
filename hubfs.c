@@ -25,6 +25,7 @@ enum buffersizes{
 
 typedef struct Hub	Hub;			/* A Hub file functions as a multiplexed pipe-like data buffer */
 typedef struct Msgq	Msgq;		/* The Msgq is a per-client fid structure to track location */
+typedef struct Hublist Hublist;		/* Linked list of hubs */
 
 struct Hub{
 	char name[SMBUF];			/* name */
@@ -53,6 +54,14 @@ struct Msgq{
 	int bufuse;				/* how much of the buffer has been used */
 };
 
+struct Hublist{
+	Hub* targethub;
+	char *hubname;
+	Hublist* nexthub;
+};
+
+Hublist* firsthublist;				/* Pointer to start of linked list of hubs */
+Hublist* lasthublist;			/* Pointer to the list entry for next hub to be created */
 char *srvname;
 int paranoia;					/* In paranoid mode loose reader/writer sync is maintained */
 int freeze;						/* In frozen mode the hubs operate simply as a ramfs */
@@ -66,6 +75,8 @@ void wrsend(Hub *h);
 void msgsend(Hub *h);
 void hubcmd(char *cmd);
 void zerohub(Hub *h);
+void addhub(Hub *h);
+void eofall(void);
 void fsread(Req *r);
 void fswrite(Req *r);
 void fscreate(Req *r);
@@ -124,6 +135,15 @@ msgsend(Hub *h)
 			if(paranoia == UP){
 				qunlock(&h->replk);
 			}
+			if(endoffile == UP){
+				r->ofcall.count = 0;
+				h->rstatus[i] = DONE;
+				if((i == h->qrans) && (i < h->qrnum)){
+					h->qrans++;
+				}
+				respond(r, nil);
+				continue;
+			}
 			continue;
 		}
 		count = r->ifcall.count;
@@ -143,8 +163,6 @@ msgsend(Hub *h)
 		/* Done with wraparound checks, now we can send the data */
 		memmove(r->ofcall.data, mq->nxt, count);
 		r->ofcall.count = count;
-		if(endoffile == UP)
-			r->ofcall.count = 0;
 		mq->nxt += count;
 		mq->bufuse += count;
 		h->rstatus[i] = DONE;
@@ -386,6 +404,7 @@ fscreate(Req *r)
 	if(f = createfile(r->fid->file, r->ifcall.name, r->fid->uid, r->ifcall.perm, nil)){
 		h = emalloc9p(sizeof(Hub));
 		zerohub(h);
+		addhub(h);
 		strcat(h->name, r->ifcall.name);
 		f->aux = h;
 		r->fid->file = f;
@@ -451,6 +470,16 @@ zerohub(Hub *h)
 	h->buckwrap = h->inbuckp + BUCKSIZE;
 }
 
+void
+addhub(Hub *h)
+{
+	lasthublist->targethub = h;
+	lasthublist->hubname = h->name;
+	lasthublist->nexthub = (Hublist*)emalloc9p(sizeof(Hublist));
+	lasthublist = lasthublist->nexthub;
+	lasthublist->nexthub=nil;
+}
+
 /* set status of paranoid mode and frozen/normal from ctl messages */
 void
 hubcmd(char *cmd)
@@ -481,6 +510,7 @@ hubcmd(char *cmd)
 	if(strncmp(cmd, "eof", 3) == 0){
 		endoffile = UP;
 		print("sending end of file to all client readers\n");
+		eofall();
 		return;
 	}
 	if(strncmp(cmd, "bloc", 4) == 0){
@@ -490,6 +520,22 @@ hubcmd(char *cmd)
 	}
 	fprint(2, "no matching command found\n");
 }
+
+void
+eofall(){
+	Hublist* currenthub;
+	currenthub = firsthublist;
+	if(currenthub->targethub == nil)
+		return;
+	print("eof to %s", currenthub->hubname);
+	msgsend(currenthub->targethub);
+	while(currenthub->nexthub->targethub != nil){
+		currenthub=currenthub->nexthub;
+		print("eof to %s\n", currenthub->hubname);
+		msgsend(currenthub->targethub);
+	}
+}
+		
 
 void
 usage(void)
@@ -536,6 +582,13 @@ main(int argc, char **argv)
 		fprint(2, "hubsrv.nopipe %d srvname %s mtpt %s\n", fs.nopipe, srvname, mtpt);
 	if(addr == nil && srvname == nil && mtpt == nil)
 		sysfatal("must specify -a, -s, or -m option");
+;
+	lasthublist = (Hublist*)emalloc9p(sizeof(Hublist));
+	lasthublist->targethub = nil;
+	lasthublist->hubname = nil;
+	lasthublist->nexthub = nil;
+	firsthublist = lasthublist;
+
 	if(addr)
 		listensrv(&fs, addr);
 	if(srvname || mtpt)
