@@ -77,6 +77,7 @@ void msgsend(Hub *h);
 void hubcmd(char *cmd);
 void zerohub(Hub *h);
 void addhub(Hub *h);
+void removehub(Hub *h);
 void eofall(void);
 void eofhub(char *target);
 
@@ -454,6 +455,7 @@ fsdestroyfile(File *f)
 
 	h = f->aux;
 	if(h){
+		removehub(h);
 		free(h);
 	}
 }
@@ -473,6 +475,7 @@ zerohub(Hub *h)
 	h->buckwrap = h->inbuckp + BUCKSIZE;
 }
 
+/* add a new hub to the linked list of hubs */
 void
 addhub(Hub *h)
 {
@@ -481,6 +484,29 @@ addhub(Hub *h)
 	lasthublist->nexthub = (Hublist*)emalloc9p(sizeof(Hublist));
 	lasthublist = lasthublist->nexthub;
 	lasthublist->nexthub=nil;
+}
+
+/* remove a hub about to be deleted from the linked list of hubs */
+void
+removehub(Hub *h)
+{
+	Hublist* currenthub;
+	currenthub = firsthublist;
+	if(currenthub->targethub = h){
+		if(currenthub->nexthub != nil)
+			firsthublist = currenthub->nexthub;
+		free(currenthub);
+		return;
+	}
+	while(currenthub->nexthub->targethub != nil){
+		if(currenthub->nexthub->targethub = h){
+			if(currenthub->nexthub->nexthub->targethub !=nil)
+				currenthub->nexthub = currenthub->nexthub->nexthub;
+			free(currenthub->nexthub);
+			return;
+		}
+		currenthub=currenthub->nexthub;
+	}
 }
 
 /* set status of paranoid mode and frozen/normal from ctl messages */
