@@ -114,37 +114,31 @@ msgsend(Hub *h)
 	u32int count;
 	int i;
 
-	if(h->qrnum == 0){
+	if(h->qrnum == 0)
 		return;
-	}
 	/* LOOP through all queued 9p read requests for this hub and answer if needed */
 	for(i = h->qrans; i <= h->qrnum; i++){
-
-		if(paranoia == UP){
+		if(paranoia == UP)
 			qlock(&h->replk);
-		}
 		if(h->rstatus[i] != WAIT){
-			if((i == h->qrans) && (i < h->qrnum)){
+			if((i == h->qrans) && (i < h->qrnum))
 				h->qrans++;
-			}
-			if(paranoia == UP){
+			if(paranoia == UP)
 				qunlock(&h->replk);
-			}
 			continue;
 		}
+
 		/* request found, if it has already read all data then keep it waiting for more and return */
 		r = h->qreqs[i];
 		mq = r->fid->aux;
 		if(mq->nxt == h->inbuckp){
-			if(paranoia == UP){
+			if(paranoia == UP)
 				qunlock(&h->replk);
-			}
 			if(endoffile == UP){
 				r->ofcall.count = 0;
 				h->rstatus[i] = DONE;
-				if((i == h->qrans) && (i < h->qrnum)){
+				if((i == h->qrans) && (i < h->qrnum))
 					h->qrans++;
-				}
 				respond(r, nil);
 				continue;
 			}
@@ -157,12 +151,10 @@ msgsend(Hub *h)
 			mq->nxt = h->bucket;
 			mq->bufuse = 0;
 		}
-		if(mq->nxt + count > h->buckwrap){
+		if(mq->nxt + count > h->buckwrap)
 			count = h->buckwrap - mq->nxt;
-		}
-		if((mq->bufuse + count > h->buckfull) && (mq->bufuse < h->buckfull)){
+		if((mq->bufuse + count > h->buckfull) && (mq->bufuse < h->buckfull))
 			count = h->buckfull - mq->bufuse;
-		}
 
 		/* Done with wraparound checks, now we can send the data */
 		memmove(r->ofcall.data, mq->nxt, count);
@@ -170,18 +162,16 @@ msgsend(Hub *h)
 		mq->nxt += count;
 		mq->bufuse += count;
 		h->rstatus[i] = DONE;
-		if((i == h->qrans) && (i < h->qrnum)){
+		if((i == h->qrans) && (i < h->qrnum))
 			h->qrans++;
-		}
 		respond(r, nil);
 
 		if(paranoia == UP){
 			h->ketchup = mq->bufuse;
-			if(mq->bufuse <= h->buckfull){
+			if(mq->bufuse <= h->buckfull)
 				h->tomatoflag = DOWN;	/* DOWN means do not wait for us */
-			} else {
+			 else
 				h->tomatoflag = UP;
-			}
 			qunlock(&h->replk);
 		}
 	}
@@ -196,9 +186,8 @@ wrsend(Hub *h)
 	int i;
 	int j;
 
-	if(h->qwnum == 0){
+	if(h->qwnum == 0)
 		return;
-	}
 
 	if(paranoia == UP){		/* If we are paranoid, we fork and slack off while the readers catch up */
 		qlock(&h->wrlk);
@@ -206,20 +195,17 @@ wrsend(Hub *h)
 			if(rfork(RFPROC|RFMEM) == 0){
 				sleep(100);
 				h->killme = UP;
-				for(j = 0; ((j < 77) && (h->tomatoflag == UP)); j++){
+				for(j = 0; ((j < 77) && (h->tomatoflag == UP)); j++)
 					sleep(7);		/* Give the readers some time to catch up and drop the flag */
-				}
-			} else {
+			} else
 				return;	/* We want this flow of control to become an incoming read request */
-			}
 		}
 	}
 	/* LOOP through queued 9p write requests for this hub */
 	for(i = h->qwans; i <= h->qwnum; i++){
 		if(h->wstatus[i] != WAIT){
-			if((i == h->qwans) && (i < h->qwnum)){
+			if((i == h->qwans) && (i < h->qwnum))
 				h->qwans++;
-			}
 			continue;
 		}
 		r = h->qwrits[i];
@@ -239,15 +225,13 @@ wrsend(Hub *h)
 		r->fid->file->length = h->buckfull;
 		r->ofcall.count = count;
 		h->wstatus[i] = DONE;
-		if((i == h->qwans) && (i < h->qwnum)){
+		if((i == h->qwans) && (i < h->qwnum))
 			h->qwans++;
-		}
 		respond(r, nil);
 
 		if(paranoia == UP){
-			if(h->wrlk.locked == 1){
+			if(h->wrlk.locked == 1)
 				qunlock(&h->wrlk);
-			}
 			if(h->killme == UP){		/* If killme is up we forked another flow of control and need to die */
 				h->killme = DOWN;
 				exits(nil);
@@ -279,11 +263,10 @@ fsread(Req *r)
 			return;
 		}
 		sprint(tmpstr, "\tHubfs %s status:\nParanoia == %d\tFreeze == %d\n", srvname, paranoia, freeze);
-		if(strlen(tmpstr) <= count){
+		if(strlen(tmpstr) <= count)
 			count = strlen(tmpstr);
-		} else {
+		else
 			respond(r, "read count too small to answer\b");
-		}
 		memmove(r->ofcall.data, tmpstr, count);
 		r->ofcall.count = count;
 		respond(r, nil);
@@ -309,17 +292,15 @@ fsread(Req *r)
 		}
 		count = r->ifcall.count;
 		offset = r->ifcall.offset;
-		while(offset >= BUCKSIZE){
+		while(offset >= BUCKSIZE)
 			offset -= BUCKSIZE;
-		}
 		if(offset >= h->buckfull){
 			r->ofcall.count = 0;
 			respond(r, nil);
 			return;
 		}
-		if((offset + count >= h->buckfull) && (offset < h->buckfull)){
+		if((offset + count >= h->buckfull) && (offset < h->buckfull))
 			count = h->buckfull - offset;
-		}
 		memmove(r->ofcall.data, h->bucket + offset, count);
 		r->ofcall.count = count;
 		respond(r, nil);
@@ -354,16 +335,14 @@ fswrite(Req *r)
 	int j;
 
 	h = r->fid->file->aux;
-	if(strncmp(h->name, "ctl", 3) == 0){
+	if(strncmp(h->name, "ctl", 3) == 0)
 		hubcmd(r->ifcall.data);
-	}
 
 	if(freeze == UP){
 		count = r->ifcall.count;
 		offset = r->ifcall.offset;
-		while(offset >= BUCKSIZE){
+		while(offset >= BUCKSIZE)
 			offset -= BUCKSIZE;
-		}
 		h->inbuckp = h->bucket +offset;
 		h->buckfull = h->inbuckp - h->bucket;
 		if(h->buckfull + count >= BUCKSIZE){
@@ -491,6 +470,7 @@ void
 removehub(Hub *h)
 {
 	Hublist* currenthub;
+
 	currenthub = firsthublist;
 	if(currenthub->targethub = h){
 		if(currenthub->nexthub != nil)
@@ -515,9 +495,8 @@ hubcmd(char *cmd)
 	int i;
 	char cmdbuf[256];
 	
-	if(strncmp(cmd, "quit", 4) == 0){
+	if(strncmp(cmd, "quit", 4) == 0)
 		sysfatal("hubfs: quit command received");
-	}
 	if(strncmp(cmd, "fear", 4) == 0){
 		paranoia = UP;
 		fprint(2, "hubfs: paranoid mode activated\n");
@@ -563,6 +542,7 @@ hubcmd(char *cmd)
 void
 eofhub(char *target){
 	Hublist* currenthub;
+
 	currenthub = firsthublist;
 	if(currenthub->targethub == nil)
 		return;
@@ -585,6 +565,7 @@ eofhub(char *target){
 void
 eofall(){
 	Hublist* currenthub;
+
 	currenthub = firsthublist;
 	if(currenthub->targethub == nil)
 		return;
