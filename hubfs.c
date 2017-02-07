@@ -419,7 +419,6 @@ fscreate(Req *r)
 	respond(r, Ebad);
 }
 
-
 /* new client for the hubfile so associate a new message queue with client fid and hub file */
 void
 fsopen(Req *r)
@@ -447,7 +446,6 @@ fsopen(Req *r)
 }
 
 /* delete the hub. Note that we don't track the associated mqs of clients so we leak them. */
-/* This is a small leak and in normal usage hubs aren't deleted anyway. */
 void
 fsdestroyfile(File *f)
 {
@@ -483,7 +481,7 @@ addhub(Hub *h)
 	lasthublist->hubname = h->name;
 	lasthublist->nexthub = (Hublist*)emalloc9p(sizeof(Hublist));
 	lasthublist = lasthublist->nexthub;
-	lasthublist->nexthub=nil;
+	lasthublist->nexthub = nil;
 }
 
 /* remove a hub about to be deleted from the linked list of hubs */
@@ -500,8 +498,7 @@ removehub(Hub *h)
 	}
 	while(currenthub->nexthub->targethub != nil){
 		if(currenthub->nexthub->targethub = h){
-			if(currenthub->nexthub->nexthub->targethub !=nil)
-				currenthub->nexthub = currenthub->nexthub->nexthub;
+			currenthub->nexthub = currenthub->nexthub->nexthub;
 			free(currenthub->nexthub);
 			return;
 		}
@@ -509,7 +506,7 @@ removehub(Hub *h)
 	}
 }
 
-/* set status of paranoid mode and frozen/normal from ctl messages */
+/* issue eofs or set status of paranoid mode and frozen/normal from ctl messages */
 void
 hubcmd(char *cmd)
 {
