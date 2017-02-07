@@ -116,6 +116,7 @@ msgsend(Hub *h)
 
 	if(h->qrnum == 0)
 		return;
+
 	/* LOOP through all queued 9p read requests for this hub and answer if needed */
 	for(i = h->qrans; i <= h->qrnum; i++){
 		if(paranoia == UP)
@@ -128,7 +129,7 @@ msgsend(Hub *h)
 			continue;
 		}
 
-		/* request found, if it has already read all data then keep it waiting for more and return */
+		/* request found, if it has already read all data keep it waiting unless eof was sent */
 		r = h->qreqs[i];
 		mq = r->fid->aux;
 		if(mq->nxt == h->inbuckp){
@@ -201,6 +202,7 @@ wrsend(Hub *h)
 				return;	/* We want this flow of control to become an incoming read request */
 		}
 	}
+
 	/* LOOP through queued 9p write requests for this hub */
 	for(i = h->qwans; i <= h->qwnum; i++){
 		if(h->wstatus[i] != WAIT){
@@ -272,6 +274,7 @@ fsread(Req *r)
 		respond(r, nil);
 		return;
 	}
+
 	if(freeze == UP){
 		mq = r->fid->aux;
 		if(mq->bufuse > 0){
@@ -306,8 +309,8 @@ fsread(Req *r)
 		respond(r, nil);
 		return;
 	}
-	/* Actual queue logic, ctl file and freeze mode logic is rarely used */
 
+	/* Actual queue logic, ctl file and freeze mode logic is rarely used */
 	if(h->qrnum >= MAXQ - 2){
 		j = 1;
 		for(i = h->qrans; i <= h->qrnum; i++) {
@@ -357,6 +360,7 @@ fswrite(Req *r)
 		respond(r, nil);
 		return;
 	}
+
 	/* Actual queue logic here */
 	if(h->qwnum >= MAXQ - 2){
 		j = 1;
@@ -377,7 +381,7 @@ fswrite(Req *r)
 	/* THEREFORE we know that there will be new data for readers and should send it to them ASAP */
 }
 
-/* making a file is making a new hub so we allocate and zero it to prepare for i/o */
+/* making a file is making a new hub, prepare it for i/o and add to list of hubs */
 void
 fscreate(Req *r)
 {
@@ -517,6 +521,8 @@ hubcmd(char *cmd)
 		fprint(2, "hubfs: the pipes thaw\n");
 		return;
 	}
+
+	/* eof command received, check if it applies to single hub then call matching eof func */
 	if(strncmp(cmd, "eof", 3) == 0){
 		endoffile = UP;
 		if(strlen(cmd) > 4){
@@ -622,7 +628,7 @@ main(int argc, char **argv)
 	if(addr == nil && srvname == nil && mtpt == nil)
 		sysfatal("must specify -a, -s, or -m option");
 
-	/* start with an allocated but empty fist Hublist entry */
+	/* start with an allocated but empty first Hublist entry */
 	lasthublist = (Hublist*)emalloc9p(sizeof(Hublist));
 	lasthublist->targethub = nil;
 	lasthublist->hubname = nil;

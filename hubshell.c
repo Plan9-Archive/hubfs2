@@ -2,15 +2,16 @@
 #include <libc.h>
 #include <ctype.h>
 
+/* hubshell is the client for hubfs, usually started by the hub wrapper script */
+/* it handles attaching and detaching from hub-connected rcs and creating new ones */
+
 enum smallbuffer{
 	SMBUF = 777,
 };
 
-/* hubshell is the client for hubfs, usually started by the hub wrapper script */
-
-/* A Shell gets "glued on" to a set of hubs and bucket-brigades data between the hubfs and std i/o fds*/
 typedef struct Shell	Shell;
 
+/* A Shell opens fds of 3 hubfiles and bucket-brigades data between the hubfs and std i/o fds*/
 struct Shell {
 	int fd[3];
 	int fdzerodelay;
@@ -22,11 +23,14 @@ struct Shell {
 	char cmdresult;
 };
 
+/* string storage for names of hubs and paths */
 char initname[SMBUF];
 char hubdir[SMBUF];
 char srvname[SMBUF];
 char ctlname[SMBUF];
 char basehub[SMBUF];
+
+/* flags for rc commands to flush buffers */
 int fortunate;
 int echoes;
 
@@ -169,7 +173,7 @@ readloop:
 		sprint(ctlbuf, "eof %s\n", basehub);
 		write(ctlfd, ctlbuf, strlen(ctlbuf) +1);
 		close(ctlfd);
-		goto readloop;
+		goto readloop;		/* Use more gotos, they aren't harmful */
 	}
 	if(n < 0)
 		fprint(2, "hubshell: error reading fd %d\n", infd);
@@ -214,6 +218,7 @@ parsebuf(Shell *s, char *buf, int outfd)
 	int ctlfd;
 	int n;
 
+	/* %detach closes hubshell fds and exits */
 	if(strncmp(buf, "detach", 6) == 0){
 		fprint(2, "hubshell: detaching\n");
 		s->shellctl = 'q';
@@ -338,27 +343,8 @@ parsebuf(Shell *s, char *buf, int outfd)
 		fprint(2, "hubshell: out hub delay set to %d\nio: ", atoi(buf +4));
 		return;
 	}
-	if(strncmp(buf, "status", 6) == 0){
-		print("\tHubshell status: attached to mounted %s of /srv/%s\n", s->basename, srvname);
-		print("\tfdzero delay: %d  fdone delay: %d  fdtwo delay: %d\n", s->fdzerodelay, s->fdonedelay, s->fdtwodelay);
-		if(fortunate)
-			print("\tfortune fd flush active\n");
-		if(echoes)
-			print("\techo fd flush active\n");
-		fprint(2, "io: ");
-		return;
-	}
-	if(strncmp(buf, "list", 4) == 0){
-		sprint(tmpstr, "/n/%s", srvname);
-		print("listing mounted hubfs at /n/%s\n", srvname);
-		if(rfork(RFPROC|RFNOTEG|RFNOWAIT) == 0){
-			execl("/bin/lc", "lc", tmpstr, 0);
-			exits(nil);
-		}
-		sleep(1500);
-		fprint(2, "io: ");
-		return;
-	}
+
+	/* %fortun and %echoes turn on buffer flush commands %unfort and %unecho deactivate */
 	if(strncmp(buf, "fortun", 6) == 0){
 		fprint(2, "hubshell: fortunes active\n");
 		fortunate = 1;
@@ -382,6 +368,7 @@ parsebuf(Shell *s, char *buf, int outfd)
 		echoes = 0;
 		return;
 	}
+
 	/* send eof message to ctl file */
 	if(strncmp(buf, "eof", 3) == 0){
 		if((ctlfd = open(ctlname, OWRITE)) == - 1){
@@ -393,6 +380,29 @@ parsebuf(Shell *s, char *buf, int outfd)
 			if(n != strlen(ctlbuf) + 1)
 				fprint(2, "hubshell: error writing to %s on fd %d\n", ctlname, ctlfd);
 		close(ctlfd);
+		return;
+	}
+
+	/* %list displays attached hubs %status reports variable settings */
+	if(strncmp(buf, "list", 4) == 0){
+		sprint(tmpstr, "/n/%s", srvname);
+		print("listing mounted hubfs at /n/%s\n", srvname);
+		if(rfork(RFPROC|RFNOTEG|RFNOWAIT) == 0){
+			execl("/bin/lc", "lc", tmpstr, 0);
+			exits(nil);
+		}
+		sleep(1500);
+		fprint(2, "io: ");
+		return;
+	}
+	if(strncmp(buf, "status", 6) == 0){
+		print("\tHubshell status: attached to mounted %s of /srv/%s\n", s->basename, srvname);
+		print("\tfdzero delay: %d  fdone delay: %d  fdtwo delay: %d\n", s->fdzerodelay, s->fdonedelay, s->fdtwodelay);
+		if(fortunate)
+			print("\tfortune fd flush active\n");
+		if(echoes)
+			print("\techo fd flush active\n");
+		fprint(2, "io: ");
 		return;
 	}
 
@@ -411,7 +421,9 @@ main(int argc, char *argv[])
 	}
 
 	fortunate = 0;
-	echoes = 1;
+	echoes = 1;		/* maybe a questionable default */
+
+	/* parse initname and set srvname hubdir and ctlname from it */
 	strncpy(initname, argv[1], SMBUF);
 	strncat(srvname, initname+3, SMBUF);
 	sprint(srvname + strcspn(srvname, "/"), "\0");
@@ -423,8 +435,7 @@ main(int argc, char *argv[])
 	strcat(ctlname, "/ctl");
 
 	s = setupshell(initname);
-	if(s == nil){
+	if(s == nil)
 		sysfatal("couldnt setup shell, bailing out\n");
-	}
 	startshell(s);
 }
