@@ -19,24 +19,24 @@ enum flags{
 
 enum buffersizes{
 	BUCKSIZE = 777777,			/* Make this bigger if you want larger buffers */
-	MAGIC = 77777,			/* In paranoid mode let readers lag this many bytes */
-	MAXQ = 777,				/* Maximum number of 9p requests to queue */
+	MAGIC = 77777,				/* In paranoid mode let readers lag this many bytes */
+	MAXQ = 777,					/* Maximum number of 9p requests to queue */
 	SMBUF = 777,				/* Just for names, small strings, etc */
 };
 
-typedef struct Hub	Hub;			/* A Hub file functions as a multiplexed pipe-like data buffer */
+typedef struct Hub	Hub;		/* A Hub file functions as a multiplexed pipe-like data buffer */
 typedef struct Msgq	Msgq;		/* The Msgq is a per-client fid structure to track location */
-typedef struct Hublist Hublist;		/* Linked list of hubs */
+typedef struct Hublist Hublist;	/* Linked list of hubs */
 
 struct Hub{
 	char name[SMBUF];			/* name */
 	char bucket[BUCKSIZE];		/* data buffer */
 	char *inbuckp;				/* location to store next message */
 	int buckfull;				/* amount of data stored in bucket */
-	char *buckwrap;			/* exact limit of written data before pointer reset */
+	char *buckwrap;				/* exact limit of written data before pointer reset */
 	Req *qreqs[MAXQ];			/* pointers to queued read Reqs */
 	int rstatus[MAXQ];			/* status of read requests */
-	int qrnum;				/* index of read Reqs waiting to be filled */
+	int qrnum;					/* index of read Reqs waiting to be filled */
 	int qrans;					/* number of read Reqs answered */
 	Req *qwrits[MAXQ];			/* Similar for write Reqs */
 	int wstatus[MAXQ];
@@ -44,7 +44,7 @@ struct Hub{
 	int qwans;
 	int ketchup;				/* used to track lag of readers relative to writers in paranoid mode */
 	int tomatoflag;				/* readers put up the tomatoflag to tell writers to wait for them  */
-	QLock wrlk;				/* writer lock during fear */
+	QLock wrlk;					/* writer lock during fear */
 	QLock replk;				/* reply lock during fear */
 	int killme;					/* in paranoid mode we fork new procs and need to kill old ones */
 };
@@ -52,7 +52,7 @@ struct Hub{
 struct Msgq{
 	ulong myfid;				/* Msgq is associated with client fids */
 	char *nxt;					/* Location of this client in the buffer */
-	int bufuse;				/* how much of the buffer has been used */
+	int bufuse;					/* how much of the buffer has been used */
 };
 
 struct Hublist{
@@ -61,7 +61,7 @@ struct Hublist{
 	Hublist* nexthub;
 };
 
-Hublist* firsthublist;				/* Pointer to start of linked list of hubs */
+Hublist* firsthublist;			/* Pointer to start of linked list of hubs */
 Hublist* lasthublist;			/* Pointer to the list entry for next hub to be created */
 char *srvname;
 int paranoia;					/* In paranoid mode loose reader/writer sync is maintained */
@@ -458,7 +458,8 @@ fsdestroyfile(File *f)
 	}
 }
 
-/* called when a hubfile is created ?Why is qrans being set to 1 and qwans to 0 when both are set to 1 upon looping? */
+/* called when a hubfile is created */
+/* ?Why is qrans being set to 1 and qwans to 0 when both are set to 1 upon looping? */
 void
 zerohub(Hub *h)
 {
@@ -479,9 +480,10 @@ addhub(Hub *h)
 {
 	lasthublist->targethub = h;
 	lasthublist->hubname = h->name;
-	lasthublist->nexthub = (Hublist*)emalloc9p(sizeof(Hublist));
+	lasthublist->nexthub = (Hublist*)emalloc9p(sizeof(Hublist)); /* always keep an empty */
 	lasthublist = lasthublist->nexthub;
 	lasthublist->nexthub = nil;
+	lasthublist->targethub = nil;
 }
 
 /* remove a hub about to be deleted from the linked list of hubs */
