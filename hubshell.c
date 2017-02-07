@@ -138,7 +138,7 @@ fdtwocat(int infd, int outfd, Shell *s)
 		fprint(2, "hubshell: error reading fd %d\n", infd);
 }
 
-/* write user input from fd0 to hubfile*/
+/* write user input from fd0 to hubfile */
 void
 fdzerocat(int infd, int outfd, Shell *s)
 {
@@ -171,7 +171,9 @@ readloop:
 			goto readloop;
 		}
 		sprint(ctlbuf, "eof %s\n", basehub);
-		write(ctlfd, ctlbuf, strlen(ctlbuf) +1);
+		n=write(ctlfd, ctlbuf, strlen(ctlbuf) +1);
+			if(n != strlen(ctlbuf) + 1)
+				fprint(2, "hubshell: error writing to %s on fd %d\n", ctlname, ctlfd);
 		close(ctlfd);
 		goto readloop;		/* Use more gotos, they aren't harmful */
 	}
@@ -308,7 +310,6 @@ parsebuf(Shell *s, char *buf, int outfd)
 			write(outfd, "fortune\n", 8);
 		if(echoes)
 			write(outfd, "echo\n", 5);
-		
 		sleep(1000);
 		closefds(s);
 		startshell(newshell);
@@ -369,7 +370,7 @@ parsebuf(Shell *s, char *buf, int outfd)
 		return;
 	}
 
-	/* send eof message to ctl file */
+	/* send eof or freeze/melt/fear/calm messages to ctl file */
 	if(strncmp(buf, "eof", 3) == 0){
 		if((ctlfd = open(ctlname, OWRITE)) == - 1){
 			fprint(2, "hubshell: can't open ctl file\n");
@@ -380,6 +381,57 @@ parsebuf(Shell *s, char *buf, int outfd)
 			if(n != strlen(ctlbuf) + 1)
 				fprint(2, "hubshell: error writing to %s on fd %d\n", ctlname, ctlfd);
 		close(ctlfd);
+		return;
+	}
+	if(strncmp(buf, "freeze", 6) == 0){
+		if((ctlfd = open(ctlname, OWRITE)) == - 1){
+			fprint(2, "hubshell: can't open ctl file\n");
+			return;
+		}
+		sprint(ctlbuf, "freeze\n");
+		n=write(ctlfd, ctlbuf, strlen(ctlbuf) +1);
+			if(n != strlen(ctlbuf) + 1)
+				fprint(2, "hubshell: error writing to %s on fd %d\n", ctlname, ctlfd);
+		close(ctlfd);
+		return;
+	}
+	if(strncmp(buf, "melt", 4) == 0){
+		if((ctlfd = open(ctlname, OWRITE)) == - 1){
+			fprint(2, "hubshell: can't open ctl file\n");
+			return;
+		}
+		sprint(ctlbuf, "melt\n");
+		n=write(ctlfd, ctlbuf, strlen(ctlbuf) +1);
+			if(n != strlen(ctlbuf) + 1)
+				fprint(2, "hubshell: error writing to %s on fd %d\n", ctlname, ctlfd);
+		close(ctlfd);
+		fprint(2, "io: ");
+		return;
+	}
+	if(strncmp(buf, "fear", 4) == 0){
+		if((ctlfd = open(ctlname, OWRITE)) == - 1){
+			fprint(2, "hubshell: can't open ctl file\n");
+			return;
+		}
+		sprint(ctlbuf, "fear\n");
+		n=write(ctlfd, ctlbuf, strlen(ctlbuf) +1);
+			if(n != strlen(ctlbuf) + 1)
+				fprint(2, "hubshell: error writing to %s on fd %d\n", ctlname, ctlfd);
+		close(ctlfd);
+		fprint(2, "io: ");
+		return;
+	}
+	if(strncmp(buf, "calm", 4) == 0){
+		if((ctlfd = open(ctlname, OWRITE)) == - 1){
+			fprint(2, "hubshell: can't open ctl file\n");
+			return;
+		}
+		sprint(ctlbuf, "calm\n");
+		n=write(ctlfd, ctlbuf, strlen(ctlbuf) +1);
+			if(n != strlen(ctlbuf) + 1)
+				fprint(2, "hubshell: error writing to %s on fd %d\n", ctlname, ctlfd);
+		close(ctlfd);
+		fprint(2, "io: ");
 		return;
 	}
 
@@ -406,6 +458,7 @@ parsebuf(Shell *s, char *buf, int outfd)
 		return;
 	}
 
+	/* no matching command found, print list of commands as reminder */
 	fprint(2, "hubshell %% commands: \n\tdetach, remote NAME, local NAME, attach NAME \n\tstatus, list, err TIME, in TIME, out TIME\n\tfortun unfort echoes unecho eof\n");
 	s->cmdresult = 'x';
 }
