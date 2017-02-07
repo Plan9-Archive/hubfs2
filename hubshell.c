@@ -47,16 +47,14 @@ setupshell(char *name)
 	int i;
 
 	s = (Shell*)malloc(sizeof(Shell));
-	if(s == nil){
+	if(s == nil)
 		sysfatal("Hubshell malloc failed!\n");
-	}
 	memset(s, 0, sizeof(Shell));
 	strncat(s->basename, name, SMBUF);
 	for(i = 1; i < 3; i++){
 		s->fdname[i] = (char*)malloc((strlen(s->basename)+1));
-		if(s->fdname[i] == nil){
+		if(s->fdname[i] == nil)
 			sysfatal("Hubshell malloc failed!\n");
-		}
 		sprint(s->fdname[i], "%s%d", s->basename, i);
 		if((s->fd[i] = open(s->fdname[i], OREAD)) < 0){
 			fprint(2, "hubshell: giving up on task - cant open %s\n", s->fdname[i]);
@@ -64,9 +62,8 @@ setupshell(char *name)
 		};
 	}
 	s->fdname[0] =  (char*)malloc((strlen(s->basename)+1));
-	if(s->fdname[0] == nil){
+	if(s->fdname[0] == nil)
 		sysfatal("Hubshell malloc failed!\n");
-	}
 	sprint(s->fdname[0], "%s%d", s->basename, 0);
 	if((s->fd[0] = open(s->fdname[0], OWRITE)) < 0){
 		fprint(2, "hubshell: giving up on task - cant open %s\n", s->fdname[0]);
@@ -106,19 +103,15 @@ fdonecat(int infd, int outfd, Shell *s)
 
 	while((n=read(infd, buf, (long)sizeof(buf)))>0){
 		sleep(s->fdonedelay);
-		if(write(outfd, buf, n)!=n){
+		if(write(outfd, buf, n)!=n)
 			fprint(2, "hubshell: write error copying on fd %d\n", outfd);
-		}
-		if(s->shellctl == 'q'){
+		if(s->shellctl == 'q')
 			exits(nil);
-		}
 	}
-	if(n == 0){
+	if(n == 0)
 		fprint(2, "hubshell: zero length read on fd %d\n", infd);
-	}
-	if(n < 0){
+	if(n < 0)
 		fprint(2, "hubshell: error reading fd %d\n", infd);
-	}
 }
 
 /* reader proc to transfer from hubfile to fd2 */
@@ -130,19 +123,15 @@ fdtwocat(int infd, int outfd, Shell *s)
 
 	while((n=read(infd, buf, (long)sizeof(buf)))>0){
 		sleep(s->fdtwodelay);
-		if(write(outfd, buf, n)!=n){
+		if(write(outfd, buf, n)!=n)
 			fprint(2, "hubshell: write error copying on fd %d\n", outfd);
-		}
-		if(s->shellctl == 'q'){
+		if(s->shellctl == 'q')
 			exits(nil);
-		}
 	}
-	if(n == 0){
+	if(n == 0)
 		fprint(2, "hubshell: zero length read on fd %d\n", infd);
-	}
-	if(n < 0){
+	if(n < 0)
 		fprint(2, "hubshell: error reading fd %d\n", infd);
-	}
 }
 
 /* write user input from fd0 to hubfile*/
@@ -166,12 +155,10 @@ readloop:
 			}
 		}
 		sleep(s->fdzerodelay);
-		if(write(outfd, buf, n)!=n){
+		if(write(outfd, buf, n)!=n)
 			fprint(2, "hubshell: write error copying on fd %d\n", outfd);
-		}
-		if(s->shellctl == 'q'){
+		if(s->shellctl == 'q')
 			exits(nil);
-		}
 	}
 	/* eof input from user, send message to hubfs ctl file */
 	if(n == 0){
@@ -184,9 +171,8 @@ readloop:
 		close(ctlfd);
 		goto readloop;
 	}
-	if(n < 0){
+	if(n < 0)
 		fprint(2, "hubshell: error reading fd %d\n", infd);
-	}
 }
 
 /* for creating new hubfiles */
@@ -209,9 +195,8 @@ closefds(Shell *s)
 {
 	int i;
 
-	for(i = 0; i < 3; i++){
+	for(i = 0; i < 3; i++)
 		close(s->fd[i]);
-	}
 }
 
 /* handles %commands */
@@ -405,9 +390,8 @@ parsebuf(Shell *s, char *buf, int outfd)
 		}
 		sprint(ctlbuf, "eof %s\n", basehub);
 		n=write(ctlfd, ctlbuf, strlen(ctlbuf) +1);
-			if(n != strlen(ctlbuf) + 1){
+			if(n != strlen(ctlbuf) + 1)
 				fprint(2, "hubshell: error writing to %s on fd %d\n", ctlname, ctlfd);
-			}
 		close(ctlfd);
 		return;
 	}
