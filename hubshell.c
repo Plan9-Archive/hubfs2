@@ -39,6 +39,7 @@ int touch(char *name);
 void closefds(Shell *s);
 void parsebuf(Shell *s, char *buf, int outfd);
 
+/* set shellgroup variables and open file descriptors */
 Shell*
 setupshell(char *name)
 {
@@ -79,6 +80,7 @@ setupshell(char *name)
 	return s;
 }
 
+/* fork two reader procs for fd1 and 2, start writing to fd0 */
 void
 startshell(Shell *s)
 {
@@ -95,6 +97,7 @@ startshell(Shell *s)
 	exits(nil);
 }
 
+/* reader proc to transfer from hubfile to fd1 */
 void
 fdonecat(int infd, int outfd, Shell *s)
 {
@@ -118,6 +121,7 @@ fdonecat(int infd, int outfd, Shell *s)
 	}
 }
 
+/* reader proc to transfer from hubfile to fd2 */
 void
 fdtwocat(int infd, int outfd, Shell *s)
 {
@@ -141,6 +145,7 @@ fdtwocat(int infd, int outfd, Shell *s)
 	}
 }
 
+/* write user input from fd0 to hubfile*/
 void
 fdzerocat(int infd, int outfd, Shell *s)
 {
@@ -151,6 +156,7 @@ fdzerocat(int infd, int outfd, Shell *s)
 
 readloop:
 	while((n=read(infd, buf, (long)sizeof(buf)))>0){
+		/* check for user %command */
 		if((strncmp(buf, "%", 1)) == 0){
 			s->cmdresult = 'p';
 			parsebuf(s, buf + 1, outfd);
@@ -167,6 +173,7 @@ readloop:
 			exits(nil);
 		}
 	}
+	/* eof input from user, send message to hubfs ctl file */
 	if(n == 0){
 		if((ctlfd = open(ctlname, OWRITE)) == - 1){
 			fprint(2, "hubshell: can't open ctl file\n");
@@ -176,13 +183,13 @@ readloop:
 		write(ctlfd, ctlbuf, strlen(ctlbuf) +1);
 		close(ctlfd);
 		goto readloop;
-
 	}
 	if(n < 0){
 		fprint(2, "hubshell: error reading fd %d\n", infd);
 	}
 }
 
+/* for creating new hubfiles */
 int
 touch(char *name)
 {
@@ -196,6 +203,7 @@ touch(char *name)
 	return 0;
 }
 
+/* close fds when a shell moves to new hubfs */
 void
 closefds(Shell *s)
 {
@@ -206,6 +214,7 @@ closefds(Shell *s)
 	}
 }
 
+/* handles %commands */
 void
 parsebuf(Shell *s, char *buf, int outfd)
 {
@@ -388,6 +397,7 @@ parsebuf(Shell *s, char *buf, int outfd)
 		echoes = 0;
 		return;
 	}
+	/* send eof message to ctl file */
 	if(strncmp(buf, "eof", 3) == 0){
 		if((ctlfd = open(ctlname, OWRITE)) == - 1){
 			fprint(2, "hubshell: can't open ctl file\n");
@@ -427,11 +437,6 @@ main(int argc, char *argv[])
 	sprint(ctlname, "/n/");
 	strncat(ctlname, srvname, SMBUF-6);
 	strcat(ctlname, "/ctl");
-/*
-	fprint(2, "srvname is %s\n", srvname);
-	fprint(2, "ctlname is %s\n", ctlname);
-	fprint(2, "hubdir is %s\n", hubdir);
-*/
 
 	s = setupshell(initname);
 	if(s == nil){

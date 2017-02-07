@@ -56,14 +56,14 @@ struct Msgq{
 };
 
 struct Hublist{
-	Hub* targethub;
-	char *hubname;
-	Hublist* nexthub;
+	Hub* targethub;				/* Hub referenced by this entry */
+	char *hubname;				/* Name of referenced Hub */
+	Hublist* nexthub;			/* Pointer to next Hublist entry in list */
 };
 
 Hublist* firsthublist;			/* Pointer to start of linked list of hubs */
 Hublist* lasthublist;			/* Pointer to the list entry for next hub to be created */
-char *srvname;
+char *srvname;					/* Name of this hubfs service */
 int paranoia;					/* In paranoid mode loose reader/writer sync is maintained */
 int freeze;						/* In frozen mode the hubs operate simply as a ramfs */
 int trunc;						/* In trunc mode clients auto-truncate files when opened */
@@ -559,6 +559,7 @@ hubcmd(char *cmd)
 	fprint(2, "hubfs: no matching command found\n");
 }
 
+/* send eof to specific named hub */
 void
 eofhub(char *target){
 	Hublist* currenthub;
@@ -580,6 +581,7 @@ eofhub(char *target){
 	}
 }	
 
+/* send eof to all hub readers */
 void
 eofall(){
 	Hublist* currenthub;
@@ -638,7 +640,8 @@ main(int argc, char **argv)
 		fprint(2, "hubsrv.nopipe %d srvname %s mtpt %s\n", fs.nopipe, srvname, mtpt);
 	if(addr == nil && srvname == nil && mtpt == nil)
 		sysfatal("must specify -a, -s, or -m option");
-;
+
+	/* start with an allocated but empty fist Hublist entry */
 	lasthublist = (Hublist*)emalloc9p(sizeof(Hublist));
 	lasthublist->targethub = nil;
 	lasthublist->hubname = nil;
