@@ -242,6 +242,7 @@ parsebuf(Shell *s, char *buf, int outfd)
 		}
 		strncat(tmpname, buf + 7, strcspn(buf + 7, "\n"));
 		fprint(2, "hubshell: creating new shell %s %s on remote host\n", srvname, tmpname);
+/*
 		for(i = 0; i < 3; i++){
 			snprint(tmpstr, SMBUF, "/n/%s/%s%d", srvname, tmpname, i);
 			if(touch(tmpstr) !=0){
@@ -256,6 +257,10 @@ parsebuf(Shell *s, char *buf, int outfd)
 		snprint(tmpstr, SMBUF, "echo 'prompt=%s%%'' '' ' >>%s\n", tmpname, fi[0]);
 		write(outfd, tmpstr, strlen(tmpstr));
 		sleep(200);
+*/
+		snprint(tmpstr, SMBUF, "hub -b %s %s\n", srvname, tmpname);
+		write(outfd, tmpstr, strlen(tmpstr));
+		sleep(1000);
 		snprint(tmpstr, SMBUF, "/n/%s/%s", srvname, tmpname);
 		newshell = setupshell(tmpstr);
 		if(newshell == nil){

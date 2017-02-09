@@ -1,5 +1,5 @@
 #!/bin/rc
-# wrapper script for hubfs and noteshell - starts both servers and clients
+# wrapper script for hubfs and hubshell - starts both servers and clients
 # hub [srvname] [shellname]
 
 rfork enf
@@ -26,9 +26,9 @@ if(~ $attach ''){
 }
 
 if (test -e /n/$srvname/$attach'0'){
-#	echo attaching noteshell to $srvname/$attach hubgroup
-	noteshell /n/$srvname/$attach
-	echo noteshell ended
+#	echo attaching hubshell to $srvname/$attach hubgroup
+	hubshell /n/$srvname/$attach
+	echo hubshell ended
 	exit ''
 }
 
@@ -47,9 +47,9 @@ if (test -e /n/$srvname/io0){
 #	rfork
 	if(! ~ $background yes){
 		sleep 1
-#		echo attaching noteshell to $srvname/$attach hubgroup
-		noteshell /n/$srvname/$attach
-		echo noteshell ended
+#		echo attaching hubshell to $srvname/$attach hubgroup
+		hubshell /n/$srvname/$attach
+		echo hubshell ended
 	}
 	exit ''
 }
@@ -83,9 +83,9 @@ if (! test -e /n/$srvname/$attach'0'){
 	sleep 1
 }
 if(! ~ $background yes){
-#	echo attaching noteshell to $srvname/$attach hubgroup
-	noteshell /n/$srvname/$attach
-	echo noteshell ended
+#	echo attaching hubshell to $srvname/$attach hubgroup
+	hubshell /n/$srvname/$attach
+	echo hubshell ended
 }
 rfork e
 prompt = $oldprompt
