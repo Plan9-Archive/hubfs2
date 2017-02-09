@@ -410,6 +410,10 @@ fsopen(Req *r)
 	Msgq *q;
 
 	h = r->fid->file->aux;
+	if(!h){
+		respond(r, nil);
+		return;
+	}
 	q = (Msgq*)emalloc9p(sizeof(Msgq));
 	memset(q, 0, sizeof(Msgq));
 	q->myfid = r->fid->fid;
@@ -420,7 +424,7 @@ fsopen(Req *r)
 		q->bufuse = h->buckfull;
 	}
 	r->fid->aux = q;
-	if(h && (r->ifcall.mode&OTRUNC)){
+	if(r->ifcall.mode&OTRUNC){
 		h->inbuckp = h->bucket;
 		h->buckfull = 0;
 		r->fid->file->length = 0;

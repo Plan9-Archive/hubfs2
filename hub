@@ -53,7 +53,8 @@ if (! test -e /n/$srvname/$attach'0'){
 			starthubfs
 		mount -c /srv/$srvname /n/$srvname
 	}
-	makehubs
+	if (! test -e /n/$srvname/$attach'0')
+		makehubs
 }
 
 if(! ~ $background yes){
