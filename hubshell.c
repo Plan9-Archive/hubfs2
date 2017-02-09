@@ -179,6 +179,7 @@ readloop:
 	}
 	if(n < 0)
 		fprint(2, "hubshell: error reading fd %d\n", infd);
+	goto readloop;
 }
 
 /* for creating new hubfiles */
@@ -463,6 +464,27 @@ parsebuf(Shell *s, char *buf, int outfd)
 	s->cmdresult = 'x';
 }
 
+int
+sendinterrupt(void *regs, char *notename)
+{
+	char notehub[SMBUF];
+	int notefd;
+
+//	return 1;	
+	if(strcmp(notename, "interrupt") != 0)
+		return 0;
+	sprint(notehub, "%s%s.note", hubdir, basehub);
+//	sprint(notehub, "%sio.note", hubdir);
+	fprint(2, "sending interrupt to %s\n", notehub);
+	if((notefd = open(notehub, OWRITE)) == -1){
+		fprint(2, "can't open %s\n", notehub);
+		return 1;
+	}
+	fprint(notefd, "interrupt");
+	close(notefd);	
+	return 1;
+}
+
 void
 main(int argc, char *argv[])
 {
@@ -487,6 +509,7 @@ main(int argc, char *argv[])
 	strncat(ctlname, srvname, SMBUF-6);
 	strcat(ctlname, "/ctl");
 
+	atnotify(sendinterrupt, 1);
 	s = setupshell(initname);
 	if(s == nil)
 		sysfatal("couldnt setup shell, bailing out\n");
