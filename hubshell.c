@@ -358,7 +358,7 @@ parsebuf(Shell *s, char *buf, int outfd)
 		return;
 	}
 
-	/* send eof or freeze/melt/fear/calm messages to ctl file */
+	/* send eof or freeze/melt/fear/calm/trunc/notrunc messages to ctl file */
 	if(strncmp(buf, "eof", 3) == 0){
 		if((ctlfd = open(ctlname, OWRITE)) == - 1){
 			fprint(2, "hubshell: can't open ctl file\n");
@@ -422,6 +422,32 @@ parsebuf(Shell *s, char *buf, int outfd)
 		fprint(2, "io: ");
 		return;
 	}
+	if(strncmp(buf, "trunc", 5) == 0){
+		if((ctlfd = open(ctlname, OWRITE)) == - 1){
+			fprint(2, "hubshell: can't open ctl file\n");
+			return;
+		}
+		sprint(ctlbuf, "trunc\n");
+		n=write(ctlfd, ctlbuf, strlen(ctlbuf) +1);
+			if(n != strlen(ctlbuf) + 1)
+				fprint(2, "hubshell: error writing to %s on fd %d\n", ctlname, ctlfd);
+		close(ctlfd);
+		fprint(2, "io: ");
+		return;
+	}
+	if(strncmp(buf, "notrunc", 7) == 0){
+		if((ctlfd = open(ctlname, OWRITE)) == - 1){
+			fprint(2, "hubshell: can't open ctl file\n");
+			return;
+		}
+		sprint(ctlbuf, "notrunc\n");
+		n=write(ctlfd, ctlbuf, strlen(ctlbuf) +1);
+			if(n != strlen(ctlbuf) + 1)
+				fprint(2, "hubshell: error writing to %s on fd %d\n", ctlname, ctlfd);
+		close(ctlfd);
+		fprint(2, "io: ");
+		return;
+	}
 
 	/* %list displays attached hubs %status reports variable settings */
 	if(strncmp(buf, "list", 4) == 0){
@@ -447,7 +473,7 @@ parsebuf(Shell *s, char *buf, int outfd)
 	}
 
 	/* no matching command found, print list of commands as reminder */
-	fprint(2, "hubshell %% commands: \n\tdetach, remote NAME, local NAME, attach NAME \n\tstatus, list, err TIME, in TIME, out TIME\n\tfortun unfort echoes unecho eof\n");
+	fprint(2, "hubshell %% commands: \n\tdetach, remote NAME, local NAME, attach NAME \n\tstatus, list, err TIME, in TIME, out TIME\n\tfortun unfort echoes unecho trunc notrunc eof\n");
 	s->cmdresult = 'x';
 }
 
