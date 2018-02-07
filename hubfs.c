@@ -57,13 +57,13 @@ struct Msgq{
 };
 
 struct Hublist{
-	Hub* targethub;				/* Hub referenced by this entry */
+	Hub *targethub;				/* Hub referenced by this entry */
 	char *hubname;				/* Name of referenced Hub */
-	Hublist* nexthub;			/* Pointer to next Hublist entry in list */
+	Hublist *nexthub;			/* Pointer to next Hublist entry in list */
 };
 
-Hublist* firsthublist;			/* Pointer to start of linked list of hubs */
-Hublist* lasthublist;			/* Pointer to the list entry for next hub to be created */
+Hublist *firsthublist;			/* Pointer to start of linked list of hubs */
+Hublist *lasthublist;			/* Pointer to the list entry for next hub to be created */
 char *srvname;					/* Name of this hubfs service */
 int numhubs;					/* Total number of hubs in existence */
 int paranoia;					/* In paranoid mode loose reader/writer sync is maintained */
@@ -82,6 +82,7 @@ void addhub(Hub *h);
 void removehub(Hub *h);
 void eofall(void);
 void eofhub(char *target);
+int flushcheck(Hub *h, Req *r);
 
 void fsread(Req *r);
 void fswrite(Req *r);
@@ -629,7 +630,7 @@ hubcmd(char *cmd)
 /* send eof to specific named hub */
 void
 eofhub(char *target){
-	Hublist* currenthub;
+	Hublist *currenthub;
 
 	currenthub = firsthublist;
 	if(currenthub->targethub == nil)
@@ -652,7 +653,7 @@ eofhub(char *target){
 /* send eof to all hub readers */
 void
 eofall(){
-	Hublist* currenthub;
+	Hublist *currenthub;
 
 	currenthub = firsthublist;
 	if(currenthub->targethub == nil)
