@@ -23,3 +23,5 @@ install:V:
 		mk $MKFLAGS $i.install
 	cp hub /rc/bin/hub
 	cp hubfs.man /sys/man/1/hubfs
+	cp chat.man /sys/man/1/chat
+
