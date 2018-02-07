@@ -472,6 +472,8 @@ flushcheck(Hub *h, Req *r)
 	int i;
 
 	for(i = h->qrans; i <= h->qrnum; i++){
+		if(h->rstatus[i] == DONE)
+			continue;
 		tr=h->qreqs[i];
 		if(tr->tag == r->ifcall.oldtag){
 			tr->ofcall.count = 0;
@@ -479,12 +481,14 @@ flushcheck(Hub *h, Req *r)
 			if((i == h->qrans) && (i < h->qrnum))
 				h->qrans++;
 			respond(tr, nil);
-//			fprint(2, "Hubfs: flushed read tag %d\n", r->ifcall.oldtag);
+			fprint(2, "Hubfs: flushed read tag %d\n", r->ifcall.oldtag);
 			respond(r, nil);
 			return 1;
 		}
 	}
 	for(i = h->qwans; i <= h->qwnum; i++){
+		if(h->wstatus[i] == DONE)
+			continue;
 		tr=h->qwrits[i];
 		if(tr->tag == r->ifcall.oldtag){
 			tr->ofcall.count = 0;
@@ -492,7 +496,7 @@ flushcheck(Hub *h, Req *r)
 			if((i == h->qwans) && (i < h->qwnum))
 				h->qwans++;
 			respond(tr, nil);
-//			fprint(2, "Hubfs: flushed write tag %d\n", r->ifcall.oldtag);
+			fprint(2, "Hubfs: flushed write tag %d\n", r->ifcall.oldtag);
 			respond(r, nil);
 			return 1;
 		}
