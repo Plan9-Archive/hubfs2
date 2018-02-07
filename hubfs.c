@@ -87,6 +87,7 @@ void fsread(Req *r);
 void fswrite(Req *r);
 void fscreate(Req *r);
 void fsopen(Req *r);
+void fsflush(Req *r);
 void fsdestroyfile(File *f);
 void usage(void);
 
@@ -95,6 +96,7 @@ Srv fs = {
 	.read = fsread,
 	.write = fswrite,
 	.create = fscreate,
+	.flush = fsflush,
 };
 
 /*
@@ -438,6 +440,63 @@ fsopen(Req *r)
 	}
 	r->fid->aux = q;
 	respond(r, nil);
+}
+
+/* flush a pending request if the client asks us to */
+void
+fsflush(Req *r)
+{
+	Hublist *currenthub;
+	int flushed;
+
+	currenthub = firsthublist;
+	flushed = flushcheck(currenthub->targethub, r);
+	if(flushed)
+		return;
+	while(currenthub->nexthub->targethub != nil){
+		currenthub=currenthub->nexthub;
+		flushed = flushcheck(currenthub->targethub, r);
+		if(flushed)
+			return;
+	}
+	fprint(2, "Hubfs: Tflush no tag matches %d\n", r->ifcall.oldtag);
+	respond(r, nil);
+}
+
+/* check a hub to see if it contains a pending Req with matching tag */
+int
+flushcheck(Hub *h, Req *r)
+{
+	Req *tr;
+	int i;
+
+	for(i = h->qrans; i <= h->qrnum; i++){
+		tr=h->qreqs[i];
+		if(tr->tag == r->ifcall.oldtag){
+			tr->ofcall.count = 0;
+			h->rstatus[i] = DONE;
+			if((i == h->qrans) && (i < h->qrnum))
+				h->qrans++;
+			respond(tr, nil);
+//			fprint(2, "Hubfs: flushed read tag %d\n", r->ifcall.oldtag);
+			respond(r, nil);
+			return 1;
+		}
+	}
+	for(i = h->qwans; i <= h->qwnum; i++){
+		tr=h->qwrits[i];
+		if(tr->tag == r->ifcall.oldtag){
+			tr->ofcall.count = 0;
+			h->wstatus[i] = DONE;
+			if((i == h->qwans) && (i < h->qwnum))
+				h->qwans++;
+			respond(tr, nil);
+//			fprint(2, "Hubfs: flushed write tag %d\n", r->ifcall.oldtag);
+			respond(r, nil);
+			return 1;
+		}
+	}
+	return 0;
 }
 
 /* delete the hub. Note that we don't track the associated mqs of clients so we leak them. */
