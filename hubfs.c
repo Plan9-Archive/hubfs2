@@ -35,11 +35,11 @@ struct Hub{
 	char *inbuckp;				/* location to store next message */
 	int buckfull;				/* amount of data stored in bucket */
 	char *buckwrap;				/* exact limit of written data before pointer reset */
-	Req *qreqs[MAXQ];			/* pointers to queued read Reqs */
+	Req *qreads[MAXQ];			/* pointers to queued read Reqs */
 	int rstatus[MAXQ];			/* status of read requests */
 	int qrnum;					/* index of read Reqs waiting to be filled */
 	int qrans;					/* number of read Reqs answered */
-	Req *qwrits[MAXQ];			/* Similar for write Reqs */
+	Req *qwrites[MAXQ];			/* Similar for write Reqs */
 	int wstatus[MAXQ];
 	int qwnum;
 	int qwans;
@@ -135,7 +135,7 @@ msgsend(Hub *h)
 		}
 
 		/* request found, if it has already read all data keep it waiting unless eof was sent */
-		r = h->qreqs[i];
+		r = h->qreads[i];
 		mq = r->fid->aux;
 		if(mq->nxt == h->inbuckp){
 			if(paranoia == UP)
@@ -215,7 +215,7 @@ wrsend(Hub *h)
 				h->qwans++;
 			continue;
 		}
-		r = h->qwrits[i];
+		r = h->qwrites[i];
 		count = r->ifcall.count;
 
 		/* BUCKET WRAPAROUND LOGIC CHECK HERE FOR BUGS */
@@ -286,7 +286,7 @@ fsread(Req *r)
 			if(h->qrnum >= MAXQ - 2){
 				j = 1;
 				for(i = h->qrans; i <= h->qrnum; i++) {
-					h->qreqs[j] = h->qreqs[i];
+					h->qreads[j] = h->qreads[i];
 					h->rstatus[j] = h->rstatus[i];
 					j++;
 				}
@@ -295,7 +295,7 @@ fsread(Req *r)
 			}
 			h->qrnum++;
 			h->rstatus[h->qrnum] = WAIT;
-			h->qreqs[h->qrnum] = r;
+			h->qreads[h->qrnum] = r;
 			return;
 		}
 		count = r->ifcall.count;
@@ -319,7 +319,7 @@ fsread(Req *r)
 	if(h->qrnum >= MAXQ - 2){
 		j = 1;
 		for(i = h->qrans; i <= h->qrnum; i++) {
-			h->qreqs[j] = h->qreqs[i];
+			h->qreads[j] = h->qreads[i];
 			h->rstatus[j] = h->rstatus[i];
 			j++;
 		}
@@ -328,7 +328,7 @@ fsread(Req *r)
 	}
 	h->qrnum++;
 	h->rstatus[h->qrnum] = WAIT;
-	h->qreqs[h->qrnum] = r;
+	h->qreads[h->qrnum] = r;
 	msgsend(h);
 }
 
@@ -370,7 +370,7 @@ fswrite(Req *r)
 	if(h->qwnum >= MAXQ - 2){
 		j = 1;
 		for(i = h->qwans; i <= h->qwnum; i++) {
-			h->qwrits[j] = h->qwrits[i];
+			h->qwrites[j] = h->qwrites[i];
 			h->wstatus[j] = h->wstatus[i];
 			j++;
 		}
@@ -379,7 +379,7 @@ fswrite(Req *r)
 	}
 	h->qwnum++;
 	h->wstatus[h->qwnum] = WAIT;
-	h->qwrits[h->qwnum] = r;
+	h->qwrites[h->qwnum] = r;
 	wrsend(h);
 	msgsend(h);
 	/* CRUCIAL - we do msgsend here after wrsend because we KNOW a write has happened */
@@ -460,7 +460,7 @@ fsflush(Req *r)
 		if(flushed)
 			return;
 	}
-	fprint(2, "Hubfs: Tflush no tag matches %d\n", r->ifcall.oldtag);
+//	fprint(2, "Hubfs: Tflush no tag matches %d\n", r->ifcall.oldtag);
 	respond(r, nil);
 }
 
@@ -474,14 +474,14 @@ flushcheck(Hub *h, Req *r)
 	for(i = h->qrans; i <= h->qrnum; i++){
 		if(h->rstatus[i] == DONE)
 			continue;
-		tr=h->qreqs[i];
+		tr=h->qreads[i];
 		if(tr->tag == r->ifcall.oldtag){
 			tr->ofcall.count = 0;
 			h->rstatus[i] = DONE;
 			if((i == h->qrans) && (i < h->qrnum))
 				h->qrans++;
 			respond(tr, nil);
-			fprint(2, "Hubfs: flushed read tag %d\n", r->ifcall.oldtag);
+//			fprint(2, "Hubfs: flushed read tag %d\n", r->ifcall.oldtag);
 			respond(r, nil);
 			return 1;
 		}
@@ -489,14 +489,14 @@ flushcheck(Hub *h, Req *r)
 	for(i = h->qwans; i <= h->qwnum; i++){
 		if(h->wstatus[i] == DONE)
 			continue;
-		tr=h->qwrits[i];
+		tr=h->qwrites[i];
 		if(tr->tag == r->ifcall.oldtag){
 			tr->ofcall.count = 0;
 			h->wstatus[i] = DONE;
 			if((i == h->qwans) && (i < h->qwnum))
 				h->qwans++;
 			respond(tr, nil);
-			fprint(2, "Hubfs: flushed write tag %d\n", r->ifcall.oldtag);
+//			fprint(2, "Hubfs: flushed write tag %d\n", r->ifcall.oldtag);
 			respond(r, nil);
 			return 1;
 		}
