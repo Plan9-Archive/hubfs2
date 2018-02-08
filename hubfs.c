@@ -472,7 +472,7 @@ flushcheck(Hub *h, Req *r)
 	int i;
 
 	for(i = h->qrans; i <= h->qrnum; i++){
-		if(h->rstatus[i] == DONE)
+		if(h->rstatus[i] != WAIT)
 			continue;
 		tr=h->qreads[i];
 		if(tr->tag == r->ifcall.oldtag){
@@ -487,7 +487,7 @@ flushcheck(Hub *h, Req *r)
 		}
 	}
 	for(i = h->qwans; i <= h->qwnum; i++){
-		if(h->wstatus[i] == DONE)
+		if(h->wstatus[i] != WAIT)
 			continue;
 		tr=h->qwrites[i];
 		if(tr->tag == r->ifcall.oldtag){
