@@ -49,11 +49,11 @@ catkill=$apid
 while(talk=`{read}){
 	if(~ $talk /*){
 		switch($talk){
-		case /q*
+		case /q
 			echo PART $name from $channel >>/n/$chatsrv/$channel
 			@{echo kill>/proc/$catkill/ctl}
 			exit
-		case /n*
+		case '/n '*
 			if(! ~ $talk(2) ''){
 				echo nick $name ' -> ' $talk(2) >>/n/$chatsrv/$channel
 				name=$talk(2)
@@ -61,7 +61,7 @@ while(talk=`{read}){
 			if not
 				echo 'you need to provide a nick for /n NICK'
 			command=yes
-		case /j*
+		case '/j '*
 			if (~ $talk(2) '')
 				echo must specify a channel to join
 			if not if(test -e /n/chat/$talk(2)){
@@ -75,7 +75,7 @@ while(talk=`{read}){
 			if not
 				echo channel does not exist
 			command=yes
-		case /h*
+		case '/h '*
 			helpmessage
 			echo currently in $channel
 			echo
@@ -86,9 +86,6 @@ while(talk=`{read}){
 			echo -------------------
 			echo currently in $channel
 			echo
-			command=yes
-		case *
-			echo unknown command
 			command=yes
 		}
 	}
