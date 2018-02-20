@@ -46,7 +46,7 @@ struct Limiter{
 
 struct Hub{
 	char name[SMBUF];			/* name */
-	char bucket[BUCKSIZE];		/* data buffer */
+	char *bucket;				/* pointer to data buffer */
 	char *inbuckp;				/* location to store next message */
 	int buckfull;				/* amount of data stored in bucket */
 	char *buckwrap;				/* exact limit of written data before pointer reset */
@@ -94,6 +94,7 @@ vlong bytespersecond;			/* Bytes per second allowed by rate limiting */
 vlong separationinterval;		/* Minimum time allowed between writes in nanoseconds */
 vlong resettime;				/* Number of seconds between writes ratelimit reset */
 u32int maxmsglen;				/* Maximum message length accepted */
+ulong bucksize;				/* Size of data bucket per hub */
 
 static char Ebad[] = "something bad happened";
 static char Enomem[] = "no memory";
@@ -315,7 +316,7 @@ wrsend(Hub *h)
 			count = maxmsglen;
 
 		/* bucket wraparound check - old buckwrap bug fixed below inbuckp count update */
-		if((h->buckfull + count) >= BUCKSIZE - 8192){
+		if((h->buckfull + count) >= bucksize - 16){
 			h->buckwrap = h->inbuckp;
 			h->inbuckp = h->bucket;
 			h->buckfull = 0;
@@ -400,8 +401,8 @@ fsread(Req *r)
 		}
 		count = r->ifcall.count;
 		offset = r->ifcall.offset;
-		while(offset >= BUCKSIZE)
-			offset -= BUCKSIZE;
+		while(offset >= bucksize)
+			offset -= bucksize;
 		if(offset >= h->buckfull){
 			r->ofcall.count = 0;
 			respond(r, nil);
@@ -449,11 +450,11 @@ fswrite(Req *r)
 	if(freeze == UP){
 		count = r->ifcall.count;
 		offset = r->ifcall.offset;
-		while(offset >= BUCKSIZE)
-			offset -= BUCKSIZE;
+		while(offset >= bucksize)
+			offset -= bucksize;
 		h->inbuckp = h->bucket +offset;
 		h->buckfull = h->inbuckp - h->bucket;
-		if(h->buckfull + count >= BUCKSIZE){
+		if(h->buckfull + count >= bucksize){
 			h->inbuckp = h->bucket;
 			h->buckfull = 0;
 		}
@@ -625,6 +626,10 @@ void
 zerohub(Hub *h)
 {
 	memset(h, 0, sizeof(Hub));
+	h->bucket = (char *)malloc(bucksize);
+	if(h->bucket == nil)
+		sysfatal("out of memory");
+	memset(h->bucket, 0, bucksize);
 	h->inbuckp = h->bucket;
 	h->qrnum = 0;
 	h->qrans = 1;
@@ -632,7 +637,7 @@ zerohub(Hub *h)
 	h->qwans = 0;
 	h->ketchup = 0;
 	h->buckfull = 0;
-	h->buckwrap = h->inbuckp + BUCKSIZE;
+	h->buckwrap = h->inbuckp + bucksize;
 	if(applylimits){
 		h->bp = bytespersecond;
 		h->st = separationinterval;
@@ -779,7 +784,7 @@ eofall(){
 void
 usage(void)
 {
-	fprint(2, "usage: hubfs [-D] [-t] [-b bytespersec] [-i nsbetweenmsgs] [-r timerreset] [-l maxmsglen] [-s srvname] [-m mtpt]\n");
+	fprint(2, "usage: hubfs [-D] [-t] [-q bucketsize] [-b bytespersec] [-i nsbetweenmsgs] [-r timerreset] [-l maxmsglen] [-s srvname] [-m mtpt]\n");
 	exits("usage");
 }
 
@@ -788,7 +793,7 @@ main(int argc, char **argv)
 {
 	char *addr = nil;
 	char *mtpt = nil;
-	char *bps, *rst, *len, *spi;
+	char *bps, *rst, *len, *spi, *qua;
 	Qid q;
 	srvname = nil;
 	fs.tree = alloctree(nil, nil, DMDIR|0777, fsdestroyfile);
@@ -803,10 +808,17 @@ main(int argc, char **argv)
 	separationinterval = 1;
 	resettime =  60;
 	maxmsglen = 666666;
+	bucksize = 777777;
 
 	ARGBEGIN{
 	case 'D':
 		chatty9p++;
+		break;
+	case 'q':
+		qua = ARGF();
+		if (qua == nil)
+			usage();
+		bucksize = strtoul(qua, 0 , 10);
 		break;
 	case 'b':
 		bps = ARGF();
