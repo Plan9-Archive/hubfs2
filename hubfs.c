@@ -9,6 +9,8 @@
 /* provides input/output multiplexing for 'screen' like functionality */
 /* usually used in combination with hubshell client and hub wrapper script */
 
+#define SECOND 1000000000
+
 /* These flags are used to set the state of queued 9p requests and also ketchup/wait in paranoid mode */
 enum flags{
 	UP = 1,
@@ -18,16 +20,29 @@ enum flags{
 };
 
 enum buffersizes{
-	BUCKSIZE = 777777,			/* Make this bigger if you want larger buffers */
+	BUCKSIZE = 777777,			/* Total size of data buffer per hub */
 	MAGIC = 77777,				/* In paranoid mode let readers lag this many bytes */
 	MAXQ = 777,					/* Maximum number of 9p requests to queue */
-	SMBUF = 777,				/* Just for names, small strings, etc */
+	SMBUF = 777,				/* Buffer for names and other small strings */
 	MAXHUBS = 77,				/* Total number of hubs that can be created */
 };
 
 typedef struct Hub	Hub;		/* A Hub file functions as a multiplexed pipe-like data buffer */
 typedef struct Msgq	Msgq;		/* The Msgq is a per-client fid structure to track location */
+typedef struct Limiter Limiter; /* Tracks time/quantity based limits on writes to a hub */
 typedef struct Hublist Hublist;	/* Linked list of hubs */
+
+struct Limiter{
+	vlong nspb;					/* Minimum nanoseconds per byte */
+	vlong sept;					/* Minimum nanoseconds separating messages */
+	vlong startt;				/* Start time to calculate intervals from */
+	vlong curt;					/* Current time (ns since epoch) */
+	vlong lastt;				/* Timestamp of previous message */
+	vlong resett;				/* Time after which to reset limit statistics */
+	vlong totalbytes;			/* Total bytes written since start time */
+	vlong difft;				/* Difference between required minimum and actual data timing */
+	ulong sleept;				/* Milliseconds of sleep time needed to throttle */
+};
 
 struct Hub{
 	char name[SMBUF];			/* name */
@@ -48,6 +63,10 @@ struct Hub{
 	QLock wrlk;					/* writer lock during fear */
 	QLock replk;				/* reply lock during fear */
 	int killme;					/* in paranoid mode we fork new procs and need to kill old ones */
+	Limiter *lp;				/* Pointer to limiter struct for this hub */
+	vlong bp;					/* Bytes per second that can be written */
+	vlong st;					/* minimum separation time between messages in ns */
+	vlong rt;					/* Interval in seconds for resetting limit timer */
 };
 
 struct Msgq{
@@ -70,9 +89,17 @@ int paranoia;					/* In paranoid mode loose reader/writer sync is maintained */
 int freeze;						/* In frozen mode the hubs operate simply as a ramfs */
 int trunc;						/* In trunc mode only new data is sent, not the buffered data */
 int endoffile;					/* Send zero length end of file read to all clients */
+int applylimits;				/* Whether time/rate limits are applied to this hubfs */
+vlong bytespersecond;			/* Bytes per second allowed by rate limiting */
+vlong separationinterval;		/* Minimum time allowed between writes in nanoseconds */
+vlong resettime;				/* Number of seconds between writes ratelimit reset */
+u32int maxmsglen;				/* Maximum message length accepted */
 
 static char Ebad[] = "something bad happened";
 static char Enomem[] = "no memory";
+
+Limiter* startlimit(vlong nsperbyte, vlong nsmingap, vlong nstoreset);
+void limit(Limiter *lp, vlong bytes);
 
 void wrsend(Hub *h);
 void msgsend(Hub *h);
@@ -99,6 +126,71 @@ Srv fs = {
 	.create = fscreate,
 	.flush = fsflush,
 };
+
+/* Rate limiting is only applied if specified by flags.
+ * The limiting parameters are global for the hubfs.
+ * Each hubfile tracks its own limits separately.
+ * Limits can be set in terms of bytes-per-second,
+ * minimum permitted interval between writes, or both.
+ * Limit tracking resets after a specified interval, default 60 sec.
+*/
+
+/* startlimit initializes the Limiter structure and returns a pointer to it */
+Limiter*
+startlimit(vlong nsperbyte, vlong nsmingap, vlong nstoreset)
+{
+	Limiter *limiter;
+
+	limiter=(Limiter*)malloc(sizeof(Limiter));
+	if(limiter == nil)
+		sysfatal("no memory");
+	limiter->nspb = nsperbyte;
+	limiter->sept = nsmingap;
+	limiter->resett = nstoreset;
+	limiter->startt = 0;
+	limiter->lastt = 0;
+	limiter->curt = 0;
+	return limiter;
+}
+
+/* limit is called whenever a write happens */
+void
+limit(Limiter *lp, vlong bytes)
+{
+	lp->curt = nsec();
+	lp->totalbytes += bytes;
+	/* initialize timers if this is the first message written to a hub */
+	if(lp->startt == 0){
+		lp->startt = lp->curt;
+		lp->lastt = lp->curt;
+//		print(".first message.");
+		return;
+	}
+	/* check if the message has arrived before the minimum interval */
+	if(lp->curt - lp->lastt < lp->sept){
+		lp->lastt = lp->curt;
+		lp->sleept = (lp->sept - (lp->curt - lp->lastt)) / 1000000;
+//		print(".sleep for %ld.", lp->sleept);
+		sleep(lp->sleept);
+		return;
+	}
+	/* reset timer if the interval between messages is sufficient */
+	if(lp->curt - lp->lastt > lp->resett){
+		lp->startt = lp->curt;
+		lp->lastt = lp->curt;
+		lp->totalbytes = bytes;
+//		print(".timer reset.");
+		return;
+	}
+	lp->lastt = lp->curt;
+	/* check the required elapsed time vs actual elapsed time */
+	lp->difft = (lp->nspb * lp->totalbytes) - (lp->curt - lp->startt);
+	if(lp->difft > 1000000){
+		lp->sleept = lp->difft / 1000000;
+//		print(".sleep for %ld.", lp->sleept);
+		sleep(lp->sleept);
+	}
+}
 
 /*
  * Basic logic - we have a buffer/bucket of data (a hub) that is mapped to a file.
@@ -219,6 +311,8 @@ wrsend(Hub *h)
 		}
 		r = h->qwrites[i];
 		count = r->ifcall.count;
+		if(count > maxmsglen)
+			count = maxmsglen;
 
 		/* bucket wraparound check - old buckwrap bug fixed below inbuckp count update */
 		if((h->buckfull + count) >= BUCKSIZE - 8192){
@@ -238,6 +332,8 @@ wrsend(Hub *h)
 		h->wstatus[i] = DONE;
 		if((i == h->qwans) && (i < h->qwnum))
 			h->qwans++;
+		if(applylimits)
+			limit(h->lp, count);
 		respond(r, nil);
 
 		if(paranoia == UP){
@@ -431,6 +527,7 @@ fsopen(Req *r)
 	}
 	q = (Msgq*)emalloc9p(sizeof(Msgq));
 	memset(q, 0, sizeof(Msgq));
+
 	q->myfid = r->fid->fid;
 	q->nxt = h->bucket;
 	q->bufuse = 0;
@@ -536,6 +633,12 @@ zerohub(Hub *h)
 	h->ketchup = 0;
 	h->buckfull = 0;
 	h->buckwrap = h->inbuckp + BUCKSIZE;
+	if(applylimits){
+		h->bp = bytespersecond;
+		h->st = separationinterval;
+		h->rt = resettime;
+		h->lp = startlimit(SECOND/h->bp, h->st, h->rt * SECOND);
+	}
 }
 
 /* add a new hub to the linked list of hubs */
@@ -676,7 +779,7 @@ eofall(){
 void
 usage(void)
 {
-	fprint(2, "usage: hubfs [-D] [-t] [-s srvname] [-m mtpt]\n");
+	fprint(2, "usage: hubfs [-D] [-t] [-b bytespersec] [-i nsbetweenmsgs] [-r timerreset] [-l maxmsglen] [-s srvname] [-m mtpt]\n");
 	exits("usage");
 }
 
@@ -685,6 +788,7 @@ main(int argc, char **argv)
 {
 	char *addr = nil;
 	char *mtpt = nil;
+	char *bps, *rst, *len, *spi;
 	Qid q;
 	srvname = nil;
 	fs.tree = alloctree(nil, nil, DMDIR|0777, fsdestroyfile);
@@ -693,11 +797,43 @@ main(int argc, char **argv)
 	freeze = DOWN;
 	trunc = DOWN;
 	endoffile = DOWN;
+	applylimits = 0;
 	numhubs = 0;
+	bytespersecond = 1073741824;
+	separationinterval = 1;
+	resettime =  60;
+	maxmsglen = 666666;
 
 	ARGBEGIN{
 	case 'D':
 		chatty9p++;
+		break;
+	case 'b':
+		bps = ARGF();
+		if (bps == nil)
+			usage();
+		bytespersecond = strtoull(bps, 0, 10);
+		applylimits = 1;
+		break;
+	case 'i':
+		spi = ARGF();
+		if (spi == nil)
+			usage();
+		separationinterval = strtoull(spi, 0, 10);
+		applylimits = 1;
+		break;
+	case 'r':
+		rst = ARGF();
+		if (rst == nil)
+			usage();
+		resettime = strtoull(rst, 0, 10);
+		applylimits = 1;
+		break;
+	case 'l':
+		len = ARGF();
+		if (len == nil)
+			usage();
+		maxmsglen = atoi(len);
 		break;
 	case 'a':
 		addr = EARGF(usage());
