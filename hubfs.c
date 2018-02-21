@@ -13,10 +13,10 @@
 
 /* Flags track the state of queued 9p requests and ketchup/wait in paranoid mode */
 enum flags{
+	DOWN = 0,
 	UP = 1,
-	DOWN = 2,
-	WAIT = 3,
-	DONE = 4,
+	WAIT = 2,
+	DONE = 3,
 };
 
 enum buffersizes{
@@ -368,7 +368,7 @@ fsread(Req *r)
 			respond(r, nil);
 			return;
 		}
-		sprint(tmpstr, "\tHubfs %s status (1 is active, 2 is inactive):\n \
+		sprint(tmpstr, "\tHubfs %s status (1 is active, 0 is inactive):\n \
 Paranoia == %d  Freeze == %d  Trunc == %d\n", srvname, paranoia, freeze, trunc);
 		if(strlen(tmpstr) <= count)
 			count = strlen(tmpstr);
@@ -800,7 +800,7 @@ main(int argc, char **argv)
 	freeze = DOWN;
 	trunc = DOWN;
 	endoffile = DOWN;
-	applylimits = 0;
+	applylimits = DOWN;
 	numhubs = 0;
 	bytespersecond = 1073741824;
 	separationinterval = 1;
@@ -823,21 +823,21 @@ main(int argc, char **argv)
 		if (bps == nil)
 			usage();
 		bytespersecond = strtoull(bps, 0, 10);
-		applylimits = 1;
+		applylimits = UP;
 		break;
 	case 'i':
 		spi = ARGF();
 		if (spi == nil)
 			usage();
 		separationinterval = strtoull(spi, 0, 10);
-		applylimits = 1;
+		applylimits = UP;
 		break;
 	case 'r':
 		rst = ARGF();
 		if (rst == nil)
 			usage();
 		resettime = strtoull(rst, 0, 10);
-		applylimits = 1;
+		applylimits = UP;
 		break;
 	case 'l':
 		len = ARGF();
