@@ -104,7 +104,7 @@ void limit(Limiter *lp, vlong bytes);
 void wrsend(Hub *h);
 void msgsend(Hub *h);
 void hubcmd(char *cmd);
-void zerohub(Hub *h);
+void setuphub(Hub *h);
 void addhub(Hub *h);
 void removehub(Hub *h);
 void eofall(void);
@@ -142,9 +142,7 @@ startlimit(vlong nsperbyte, vlong nsmingap, vlong nstoreset)
 {
 	Limiter *limiter;
 
-	limiter=(Limiter*)malloc(sizeof(Limiter));
-	if(limiter == nil)
-		sysfatal("no memory");
+	limiter=(Limiter*)emalloc9p(sizeof(Limiter));
 	limiter->nspb = nsperbyte;
 	limiter->sept = nsmingap;
 	limiter->resett = nstoreset;
@@ -502,8 +500,8 @@ fscreate(Req *r)
 	}
 	if(f = createfile(r->fid->file, r->ifcall.name, r->fid->uid, r->ifcall.perm, nil)){
 		numhubs++;
-		h = emalloc9p(sizeof(Hub));
-		zerohub(h);
+		h = (Hub*)emalloc9p(sizeof(Hub));
+		setuphub(h);
 		addhub(h);
 		strcat(h->name, r->ifcall.name);
 		f->aux = h;
@@ -528,7 +526,6 @@ fsopen(Req *r)
 		return;
 	}
 	q = (Msgq*)emalloc9p(sizeof(Msgq));
-	memset(q, 0, sizeof(Msgq));
 
 	q->myfid = r->fid->fid;
 	q->nxt = h->bucket;
@@ -621,13 +618,9 @@ fsdestroyfile(File *f)
 /* called when a hubfile is created */
 /* ?Why is qrans set to 1 and qwans to 0 when both are set to 1 upon looping? */
 void
-zerohub(Hub *h)
+setuphub(Hub *h)
 {
-	memset(h, 0, sizeof(Hub));
-	h->bucket = (char *)malloc(bucksize);
-	if(h->bucket == nil)
-		sysfatal("out of memory");
-	memset(h->bucket, 0, bucksize);
+	h->bucket = (char*)emalloc9p(bucksize);
 	h->inbuckp = h->bucket;
 	h->qrnum = 0;
 	h->qrans = 1;
