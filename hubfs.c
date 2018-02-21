@@ -369,11 +369,12 @@ fsread(Req *r)
 			return;
 		}
 		sprint(tmpstr, "\tHubfs %s status (1 is active, 0 is inactive):\n \
-Paranoia == %d  Freeze == %d  Trunc == %d\n", srvname, paranoia, freeze, trunc);
+Paranoia == %d  Freeze == %d  Trunc == %d  Applylimits == %d\n \
+Buffersize == %uld \n", srvname, paranoia, freeze, trunc, applylimits, bucksize);
 		if(strlen(tmpstr) <= count)
 			count = strlen(tmpstr);
 		else
-			respond(r, "read count too small to answer\b");
+			respond(r, "read count too small to answer");
 		memmove(r->ofcall.data, tmpstr, count);
 		r->ofcall.count = count;
 		respond(r, nil);
@@ -794,8 +795,6 @@ main(int argc, char **argv)
 	char *bps, *rst, *len, *spi, *qua;
 	Qid q;
 	srvname = nil;
-	fs.tree = alloctree(nil, nil, DMDIR|0777, fsdestroyfile);
-	q = fs.tree->root->qid;
 	paranoia = DOWN;
 	freeze = DOWN;
 	trunc = DOWN;
@@ -807,6 +806,9 @@ main(int argc, char **argv)
 	resettime =  60;
 	maxmsglen = 666666;
 	bucksize = 777777;
+
+	fs.tree = alloctree(nil, nil, DMDIR|0777, fsdestroyfile);
+	q = fs.tree->root->qid;
 
 	ARGBEGIN{
 	case 'D':
