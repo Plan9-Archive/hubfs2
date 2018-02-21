@@ -11,7 +11,7 @@
 
 #define SECOND 1000000000
 
-/* These flags are used to set the state of queued 9p requests and also ketchup/wait in paranoid mode */
+/* Flags track the state of queued 9p requests and ketchup/wait in paranoid mode */
 enum flags{
 	UP = 1,
 	DOWN = 2,
@@ -58,7 +58,7 @@ struct Hub{
 	int wstatus[MAXQ];
 	int qwnum;
 	int qwans;
-	int ketchup;				/* used to track lag of readers relative to writers in paranoid mode */
+	int ketchup;				/* tracks lag of readers relative to writers in paranoid mode */
 	int tomatoflag;				/* readers put up the tomatoflag to tell writers to wait for them  */
 	QLock wrlk;					/* writer lock during fear */
 	QLock replk;				/* reply lock during fear */
@@ -94,7 +94,7 @@ vlong bytespersecond;			/* Bytes per second allowed by rate limiting */
 vlong separationinterval;		/* Minimum time allowed between writes in nanoseconds */
 vlong resettime;				/* Number of seconds between writes ratelimit reset */
 u32int maxmsglen;				/* Maximum message length accepted */
-ulong bucksize;				/* Size of data bucket per hub */
+ulong bucksize;					/* Size of data bucket per hub */
 
 static char Ebad[] = "something bad happened";
 static char Enomem[] = "no memory";
@@ -128,7 +128,8 @@ Srv fs = {
 	.flush = fsflush,
 };
 
-/* Rate limiting is only applied if specified by flags.
+/*
+ * Rate limiting is only applied if specified by flags.
  * The limiting parameters are global for the hubfs.
  * Each hubfile tracks its own limits separately.
  * Limits can be set in terms of bytes-per-second,
@@ -164,14 +165,12 @@ limit(Limiter *lp, vlong bytes)
 	if(lp->startt == 0){
 		lp->startt = lp->curt;
 		lp->lastt = lp->curt;
-//		print(".first message.");
 		return;
 	}
 	/* check if the message has arrived before the minimum interval */
 	if(lp->curt - lp->lastt < lp->sept){
 		lp->lastt = lp->curt;
 		lp->sleept = (lp->sept - (lp->curt - lp->lastt)) / 1000000;
-//		print(".sleep for %ld.", lp->sleept);
 		sleep(lp->sleept);
 		return;
 	}
@@ -180,7 +179,6 @@ limit(Limiter *lp, vlong bytes)
 		lp->startt = lp->curt;
 		lp->lastt = lp->curt;
 		lp->totalbytes = bytes;
-//		print(".timer reset.");
 		return;
 	}
 	lp->lastt = lp->curt;
@@ -188,7 +186,6 @@ limit(Limiter *lp, vlong bytes)
 	lp->difft = (lp->nspb * lp->totalbytes) - (lp->curt - lp->startt);
 	if(lp->difft > 1000000){
 		lp->sleept = lp->difft / 1000000;
-//		print(".sleep for %ld.", lp->sleept);
 		sleep(lp->sleept);
 	}
 }
@@ -198,7 +195,7 @@ limit(Limiter *lp, vlong bytes)
  * For each hub we keep two queues of 9p requests, one for reads and one for writes.
  * As requests come in, we add them to the queue, then fill queued requests that are waiting.
  * The data buffers are statically sized at creation. This means that data is continuously read
- * and written in a "rotating" pattern. When we reach the end, we wrap back around to the beginning. 
+ * and written in a "rotating" pattern. When we reach the end, we wrap back around to the start. 
  * Our job is accurately transferring the bytes in and out of the bucket and 
  * tracking the location of the 'read and write heads' for each writer and each reader. 
 */
@@ -227,7 +224,7 @@ msgsend(Hub *h)
 			continue;
 		}
 
-		/* request found, if it has already read all data keep it waiting unless eof was sent */
+		/* request found, if it has already read all data keep it waiting unless eof sent */
 		r = h->qreads[i];
 		mq = r->fid->aux;
 		if(mq->nxt == h->inbuckp){
@@ -290,16 +287,17 @@ wrsend(Hub *h)
 	if(h->qwnum == 0)
 		return;
 
-	if(paranoia == UP){		/* If we are paranoid, we fork and slack off while the readers catch up */
+	/* If we are paranoid, we fork and slack off while the readers catch up */
+	if(paranoia == UP){
 		qlock(&h->wrlk);
 		if((h->ketchup < h->buckfull - MAGIC) || (h->ketchup > h->buckfull)){
 			if(rfork(RFPROC|RFMEM) == 0){
 				sleep(100);
 				h->killme = UP;
 				for(j = 0; ((j < 77) && (h->tomatoflag == UP)); j++)
-					sleep(7);		/* Give the readers some time to catch up and drop the flag */
+					sleep(7);		/* Give readers time to catch up */
 			} else
-				return;	/* We want this flow of control to become an incoming read request */
+				return;	/* This branch should become a read request */
 		}
 	}
 
@@ -340,7 +338,8 @@ wrsend(Hub *h)
 		if(paranoia == UP){
 			if(h->wrlk.locked == 1)
 				qunlock(&h->wrlk);
-			if(h->killme == UP){		/* If killme is up we forked another flow of control and need to die */
+			/* If killme is up we forked another flow of control and need to die */
+			if(h->killme == UP){
 				h->killme = DOWN;
 				exits(nil);
 			}
@@ -514,7 +513,7 @@ fscreate(Req *r)
 	respond(r, Ebad);
 }
 
-/* new client for the hubfile so associate a new message queue with client fid and hub file */
+/* new client for the hubfile, create a new message queue with client fid and hub file */
 void
 fsopen(Req *r)
 {
@@ -562,7 +561,6 @@ fsflush(Req *r)
 		if(flushed)
 			return;
 	}
-//	fprint(2, "Hubfs: Tflush no tag matches %d\n", r->ifcall.oldtag);
 	respond(r, nil);
 }
 
@@ -583,7 +581,6 @@ flushcheck(Hub *h, Req *r)
 			if((i == h->qrans) && (i < h->qrnum))
 				h->qrans++;
 			respond(tr, nil);
-//			fprint(2, "Hubfs: flushed read tag %d\n", r->ifcall.oldtag);
 			respond(r, nil);
 			return 1;
 		}
@@ -598,7 +595,6 @@ flushcheck(Hub *h, Req *r)
 			if((i == h->qwans) && (i < h->qwnum))
 				h->qwans++;
 			respond(tr, nil);
-//			fprint(2, "Hubfs: flushed write tag %d\n", r->ifcall.oldtag);
 			respond(r, nil);
 			return 1;
 		}
@@ -606,7 +602,7 @@ flushcheck(Hub *h, Req *r)
 	return 0;
 }
 
-/* delete the hub. Note that we don't track the associated mqs of clients so we leak them. */
+/* delete the hub. We don't track the associated mqs of clients so we leak them. */
 void
 fsdestroyfile(File *f)
 {
@@ -652,7 +648,7 @@ addhub(Hub *h)
 {
 	lasthublist->targethub = h;
 	lasthublist->hubname = h->name;
-	lasthublist->nexthub = (Hublist*)emalloc9p(sizeof(Hublist)); /* always keep an empty */
+	lasthublist->nexthub = (Hublist*)emalloc9p(sizeof(Hublist)); /* keep an empty */
 	lasthublist = lasthublist->nexthub;
 	lasthublist->nexthub = nil;
 	lasthublist->targethub = nil;
@@ -721,7 +717,7 @@ hubcmd(char *cmd)
 		return;
 	}
 
-	/* eof command received, check if it applies to single hub then call matching eof func */
+	/* eof command received, check if it applies to single hub then dispatch */
 	if(strncmp(cmd, "eof", 3) == 0){
 		endoffile = UP;
 		if(strlen(cmd) > 4){
