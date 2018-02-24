@@ -12,7 +12,7 @@ UPDATE=\
 
 </sys/src/cmd/mkmany
 
-$O.hubfs: hubfs.$O
+$O.hubfs: hubfs.$O ratelimit.$O
 	$LD -o $target $prereq
 
 $O.hubshell: hubshell.$O
