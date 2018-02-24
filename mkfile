@@ -22,6 +22,7 @@ install:V:
 	for (i in $TARG)
 		mk $MKFLAGS $i.install
 	cp hub /rc/bin/hub
+	cp chat /rc/bin/chat
 	cp hubfs.man /sys/man/1/hubfs
 	cp chat.man /sys/man/1/chat
 
