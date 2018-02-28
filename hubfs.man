@@ -1,4 +1,4 @@
-.TH HUBFS 1 
+.TH HUBFS 4
 .SH NAME
 hub, hubfs, hubshell  \- persistent multiplexed i/o and shells
 .SH SYNOPSIS
@@ -75,7 +75,7 @@ as a client for these connections. The overall usage model is somewhat similar t
 but without the additional complexities of TTY management.
 .PP
 The base behavior of 
-.IR hub (1)
+.I hub
 .I srvname
 is bimodal, and will function as either a client or server depending on whether 
 .I /srv/srvname
