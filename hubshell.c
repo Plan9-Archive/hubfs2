@@ -100,7 +100,6 @@ Shell* setupshell(char*);
 void startshell(Shell*);
 void fdread(int, Shell*);
 void fdinput(int, Shell*);
-int touch(char*);
 void closefds(Shell*);
 void parsebuf(Shell*, char*, int);
 
@@ -194,7 +193,7 @@ fdinput(int fd, Shell *s)
 	int ctlfd;
 
 readloop:
-	while((n=read(fd, buf, sizeof(buf)))>0){
+	while((n=read(fd, buf, sizeof(buf)-1))>0){
 		buf[n] = '\0';
 		/* check for user %command */
 		if(buf[0] == '%'){
@@ -217,8 +216,7 @@ readloop:
 			fprint(2, "hubshell: can't open ctl file\n");
 			goto readloop;
 		}
-		sprint(ctlbuf, "eof %s\n", basehub);
-		n = strlen(ctlbuf);
+		n = sprint(ctlbuf, "eof %s\n", basehub);
 		if(write(ctlfd, ctlbuf, n) != n)
 			fprint(2, "hubshell: error writing to %s on fd %d\n", ctlname, ctlfd);
 		close(ctlfd);
@@ -231,19 +229,7 @@ readloop:
 	goto readloop;		/* Use more gotos, they aren't harmful */
 }
 
-/* for creating new hubfiles */
-int
-touch(char *name)
-{
-	int fd;
 
-	if((fd = create(name, OREAD|OEXCL, 0660)) < 0){
-		fprint(2, "hubshell: %s: cannot create: %r\n", name);
-		return 1;
-	}
-	close(fd);
-	return 0;
-}
 
 /* close fds when a shell moves to new hubfs */
 void
@@ -392,7 +378,7 @@ parsebuf(Shell *s, char *buf, int outfd)
 		}
 		break;
 	case Status:
-		print("\tHubshell status: attached to mounted %s of /srv/%s\n"
+		print("\tHubshell attached to mounted %s of /srv/%s\n"
 			"\tfdzero delay: %ld  fdone delay: %ld  fdtwo delay: %ld\n"
 			, s->basename, srvname, s->fddelay[0], s->fddelay[1], s->fddelay[2]);
 		if(fortunate)
