@@ -5,9 +5,25 @@
 /* hubshell is the client for hubfs, usually started by the hub wrapper script */
 /* it handles attaching and detaching from hub-connected rcs and creating new ones */
 
-enum smallbuffer{
+enum {
 	SMBUF = 512,
 };
+
+void
+warn(char *fmt, ...)
+{
+	va_list arg;
+	char buf[SMBUF*2];	/* somewhat arbitrary */
+	int n;
+
+	if((n = snprint(buf, sizeof(buf), "%s: ", argv0)) < 0)
+		abort();
+	va_start(arg, fmt);
+	vseprint(buf+n, buf+sizeof(buf), fmt, arg);
+	va_end(arg);
+
+	fprint(2, "%s\n", buf);
+}
 
 enum{
 	Detach,
@@ -82,19 +98,24 @@ struct Shell {
 	char basename[SMBUF];
 	char *fdname[3];
 	char shellctl;
-	char cmdresult;
+	QLock;
+	int ref;
 };
 
+Shell *activeshell;
+int cpid;
 int notereceived;
 
 /* string storage for names of hubs and paths */
-char initname[SMBUF];
-char hubdir[SMBUF];
+char shellname[SMBUF];
+char mtpt[SMBUF];
 char srvname[SMBUF];
 char ctlname[SMBUF];
 char basehub[SMBUF];
+char *prompt = "io; ";
+int promptlen;
 
-/* flags for rc commands to flush buffers */
+/* flags for rc commands to run when flushing buffers */
 int fortunate;
 int echoes;
 
@@ -102,8 +123,10 @@ Shell* setupshell(char*);
 void startshell(Shell*);
 void fdread(int, Shell*);
 void fdinput(int, Shell*);
-void closefds(Shell*);
-void parsebuf(Shell*, char*, int);
+int touch(char*);
+void freeshell(Shell*);
+int parsebuf(Shell*, char*, int);
+void killfamily(void);
 
 void*
 emalloc(ulong sz)
@@ -118,6 +141,15 @@ emalloc(ulong sz)
 	return v;
 }
 
+int
+erfork(int flags)
+{
+	int n;
+	if((n = rfork(flags)) < 0)
+		sysfatal("erfork: %r");
+	return n;
+}
+
 /* set shellgroup variables and open file descriptors */
 Shell*
 setupshell(char *name)
@@ -126,42 +158,57 @@ setupshell(char *name)
 	int i;
 
 	s = emalloc(sizeof(*s));
-	strncat(s->basename, name, SMBUF);
+	for(i=0; i<3; i++)
+		s->fd[i] = -1;
+	snprint(s->basename, sizeof(s->basename), "%s/%s", mtpt, name);
 	for(i = 1; i < 3; i++){
 		if((s->fdname[i] = smprint("%s%d", s->basename, i)) == nil)
 			sysfatal("smprint: %r");
 		if((s->fd[i] = open(s->fdname[i], OREAD)) < 0){
-			fprint(2, "hubshell: giving up on task - cant open %s\n", s->fdname[i]);
+		err:
+			warn("giving up on task - can't open %s: %r", s->fdname[i]);
+			freeshell(s);
 			return nil;
 		};
 	}
-	s->fddelay[2] = 30;
+	s->fddelay[0] = -1;
+	s->fddelay[1] = -1;
+	s->fddelay[2] = -1;
 	if((s->fdname[0] = smprint("%s%d", s->basename, 0)) == nil)
 		sysfatal("smprint: %r");
-	sprint(s->fdname[0], "%s%d", s->basename, 0);
 	if((s->fd[0] = open(s->fdname[0], OWRITE)) < 0){
-		fprint(2, "hubshell: giving up on task - cant open %s\n", s->fdname[0]);
-		return nil;
+		i = 0;
+		goto err;
 	}
-	sprint(basehub, s->fdname[0] + strlen(hubdir));
-	s->cmdresult = 'a';
+	strncpy(basehub, s->fdname[0] + strlen(mtpt)+1, sizeof(basehub));
 	return s;
 }
 
-/* fork two reader procs for fd1 and 2, start writing to fd0 */
+void
+freeactiveshell(void)
+{
+	freeshell(activeshell);
+}
+
 void
 startshell(Shell *s)
 {
-	/* fork cats for each file descriptor used by a shell */
-	if(rfork(RFPROC|RFMEM|RFNOWAIT|RFNOTEG)==0){
+	if(cpid != -1)
+		killfamily();
+
+	activeshell = s;
+
+	if(cpid = erfork(RFPROC|RFMEM|RFNOTEG|RFNOWAIT)){
+		atexit(freeactiveshell);
+		fdinput(0, s);
+	} else if(erfork(RFPROC|RFMEM|RFNOWAIT)){
+		atexit(freeactiveshell);
 		fdread(1, s);
-		exits(nil);
-	}
-	if(rfork(RFPROC|RFMEM|RFNOWAIT|RFNOTEG)==0){
+	} else{
+		atexit(freeactiveshell);
 		fdread(2, s);
-		exits(nil);
 	}
-	fdinput(0, s);
+
 	exits(nil);
 }
 
@@ -171,21 +218,23 @@ fdread(int fd, Shell *s)
 	char buf[8192+1];
 	long n;
 
-	while((n=read(s->fd[fd], buf, sizeof(buf)-1))>0){
+	s->ref++;
+	while((n=read(s->fd[fd], buf, sizeof(buf)-1)) > 0){
 		buf[n] = '\0';
-		sleep(s->fddelay[fd]);
-		if(write(fd, buf, n)!=n){
-			fprint(2, "hubshell: write error copying on fd %d\n", fd);
-			exits(nil);
+		if(s->fddelay[fd] >= 0)
+			sleep(s->fddelay[fd]);
+		if(write(fd, buf, n) != n){
+			warn("error writing to %s on fd[%d]: %r", s->fdname[fd], s->fd[fd]);
+			return;
 		}
 		if(s->shellctl == 'q')
-			exits(nil);
+			return;
 	}
 	if(n < 0)
-		fprint(2, "hubshell: error reading fd %d\n", s->fd[fd]);
+		warn("error reading from %s on fd[%d]: %r", s->fdname[fd], s->fd[fd]);
 }
 
-/* write user input from fd0 to hubfile */
+/* write user input to hubfile */
 void
 fdinput(int fd, Shell *s)
 {
@@ -194,164 +243,183 @@ fdinput(int fd, Shell *s)
 	char ctlbuf[8192];
 	int ctlfd;
 
+	s->ref++;
 readloop:
 	while((n=read(fd, buf, sizeof(buf)-1))>0){
 		buf[n] = '\0';
 		/* check for user %command */
-		if(buf[0] == '%'){
-			s->cmdresult = 'p';
-			parsebuf(s, buf + 1, s->fd[fd]);
-			if(s->cmdresult != 'x'){
-				memset(buf, 0, 8192);
-				continue;
-			}
-		}
-		sleep(s->fddelay[fd]);
+		if(buf[0] == '%' && parsebuf(s, buf+1, s->fd[fd]))
+			continue;
+		if(s->fddelay[fd] >= 0)
+			sleep(s->fddelay[fd]);
 		if(write(s->fd[fd], buf, n)!=n)
-			fprint(2, "hubshell: write error copying on fd %d\n", s->fd[fd]);
+			warn("error writing to %s on fd[%d]: %r", s->fdname[fd], s->fd[fd]);
 		if(s->shellctl == 'q')
-			exits(nil);
+			return;
 	}
 	/* eof input from user, send message to hubfs ctl file */
 	if(n == 0){
 		if((ctlfd = open(ctlname, OWRITE)) < 0){
-			fprint(2, "hubshell: can't open ctl file\n");
+			warn("can't open ctl file: %r");
 			goto readloop;
 		}
-		n = sprint(ctlbuf, "eof %s\n", basehub);
+		snprint(ctlbuf, sizeof(ctlbuf), "eof %s\n", basehub);
+		n = strlen(ctlbuf);
 		if(write(ctlfd, ctlbuf, n) != n)
-			fprint(2, "hubshell: error writing to %s on fd %d\n", ctlname, ctlfd);
+			warn("error writing to %s on fd[%d]: %r", ctlname, ctlfd);
 		close(ctlfd);
 	}
 	/* hack to fix infinite loop bug with headless drawterm */
-	if(n < 0)
-		if(notereceived == 0)
-			exits(nil);
+	if(n < 0 && notereceived == 0)
+		return;
 	notereceived = 0;
 	goto readloop;		/* Use more gotos, they aren't harmful */
 }
 
+/* for creating new hubfiles */
+int
+touch(char *name)
+{
+	int fd;
 
+	if((fd = create(name, OREAD|OEXCL, 0660)) < 0){
+		warn("%s: cannot create: %r", name);
+		return 1;
+	}
+	close(fd);
+	return 0;
+}
 
 /* close fds when a shell moves to new hubfs */
 void
-closefds(Shell *s)
+freeshell(Shell *s)
 {
 	int i;
 
-	for(i = 0; i < 3; i++)
-		close(s->fd[i]);
+	if(--s->ref > 0 || !canqlock(s))
+		return;
+	for(i = 0; i < 3; i++){
+		if(s->fd[i] >= 0)
+			close(s->fd[i]);
+		if(s->fdname[i] != nil)
+			free(s->fdname[i]);
+	}
+	free(s);
+}
+
+void
+endshell(Shell *s, Shell *ns, int fd)
+{
+	s->shellctl = 'q';
+	if(fortunate) write(fd, "fortune\n", 8);
+	if(echoes) write(fd, "echo\n", 5);
+
+	/* races everywhere */
+	sleep(100);
+	killfamily();
+	freeshell(s);
+	sleep(100);
+	if(ns)
+		startshell(ns);
 }
 
 /* handles %commands */
-void
-parsebuf(Shell *s, char *buf, int outfd)
+int
+parsebuf(Shell *s, char *buf, int ofd)
 {
 	char *p, *q;
-	char tmpstr[SMBUF];
-	char tmpname[SMBUF];
 	Shell *newshell;
-	memset(tmpstr, 0, SMBUF);
-	memset(tmpname, 0, SMBUF);
 	char ctlbuf[SMBUF];
 	int ctlfd;
-	int cmd;
+	int cmd, cmdlen;
 	long n;
 
 	cmd = getcmd(buf);
+
+	if(cmd != NCmd){
+		if(p = strchr(buf, '\n'))
+			*p = '\0';
+		cmdlen = strlen(cmdstr[cmd]);
+		if(buf[cmdlen] != '\0'){
+			p = buf+cmdlen;
+			while(*p == ' ' || *p == '\t')
+				p++;
+			if(*p == '\0')
+				p = nil;
+		}
+		else
+			p = nil;
+	} else
+		p = nil;
+
 	switch(cmd){
 	case Detach:	/* %detach closes hubshell fds and exits */
-		fprint(2, "hubshell: detaching\n");
-		s->shellctl = 'q';
-		if(fortunate)
-			write(outfd, "fortune\n", 8);
-		if(echoes)
-			write(outfd, "echo\n", 5);
-		closefds(s);
+		warn("detaching");
+		endshell(s, nil, ofd);
 		exits(nil);
 	case Remote:	/* %remote command makes new shell on hubfs host by sending hub -b command */
-		if(isalpha(*(buf + 7)) == 0){
-			fprint(2, "hubshell: remote needs a name parameter to create new hubs\n");
+		if(p == nil){
+			warn("remote needs a name parameter to create new hubs");
 			break;
 		}
-		strncat(tmpname, buf + 7, strcspn(buf + 7, "\n"));
-		fprint(2, "hubshell: creating new shell %s %s on remote host\n", srvname, tmpname);
-		snprint(tmpstr, SMBUF, "hub -b %s %s\n", srvname, tmpname);
-		write(outfd, tmpstr, strlen(tmpstr));
-		snprint(tmpstr, SMBUF, "/n/%s/%s", srvname, tmpname);
-		newshell = setupshell(tmpstr);
+		warn("attaching to remote %s, new shell %s", srvname, p);
+		fprint(ofd, "hub -b %s %s\n", srvname, p);
+		sleep(100);
+		newshell = setupshell(p);
 		if(newshell == nil){
-			fprint(2, "hubshell: failed to setup up client shell, maybe problems on remote end\n");
+			warn("failed to setup up client shell, maybe problems on remote end");
 			break;
 		}
-		s->shellctl = 'q';
-		if(fortunate)
-			write(outfd, "fortune\n", 8);
-		if(echoes)
-			write(outfd, "echo\n", 5);
-		closefds(s);
-		startshell(newshell);
+		endshell(s, newshell, ofd);
 	case Local:	/* %local command makes new shell on local machine by executing the hub command and exiting */
-		if(isalpha(*(buf + 6)) == 0){
-			fprint(2, "hubshell: local needs a name parameter to create new hubs\n");
+		if(p == nil){
+			warn("local needs a name parameter to create new hubs");
 			break;
 		}
-		strncpy(tmpstr, buf + 6, strcspn(buf + 6, "\n"));
-		fprint(2, "hubshell: creating new local shell using hub %s %s\n", srvname, tmpstr);
-		s->shellctl = 'q';
-		if(fortunate)
-			write(outfd, "fortune\n", 8);
-		if(echoes)
-			write(outfd, "echo\n", 5);
-		closefds(s);
-		execl("/bin/hub", "hub", srvname, tmpstr, 0);
+		warn("attaching to %s, new shell %s", srvname, p);
+		endshell(s, nil, ofd);
+		execl("/bin/hub", "hub", srvname, p, 0);
 		sysfatal("execl: %r");
 	case Attach:	/* %attach name starts new shell and exits the current one */
-		if(isalpha(*(buf + 7)) == 0){
-			fprint(2, "hubshell: attach needs a name parameter to know what hubs to use, try %%list\n");
+		if(p == nil){
+			warn("attach needs a name parameter to know what hubs to use, try %%list");
 			break;
 		}
-		strncat(tmpname, buf + 7, strcspn(buf + 7, "\n"));
-		fprint(2, "hubshell: attaching to  shell %s %s\n", srvname, tmpname);
-		snprint(tmpstr, SMBUF, "/n/%s/%s", srvname, tmpname);
-		newshell = setupshell(tmpstr);
+		warn("attaching to %s, shell %s", srvname, p);
+		newshell = setupshell(p);
 		if(newshell == nil){
-			fprint(2, "hubshell: failed to setup up client shell - do you need to create it with remote NAME?\n");
+			warn("client setupshell() failed - do you need to create it with remote NAME?");
 			break;
 		}
-		s->shellctl = 'q';
-		if(fortunate)
-			write(outfd, "fortune\n", 8);
-		if(echoes)
-			write(outfd, "echo\n", 5);
-		closefds(s);
-		startshell(newshell);
+		endshell(s, newshell, ofd);
 	case Err:	/* %err %in %out LONG set the delay before reading/writing on that fd to LONG milliseconds */
 	case In:
 	case Out:
-		p = buf+strlen(cmdstr[cmd]);
-		n = strtol(p, &q, 10);
-		if(p == q || (*q != '\n' && *q != '\0')){
-			fprint(2, "hubshell: %s hub delay setting requires numeric delay\n", cmdstr[cmd]);
+		if(p != nil)
+			n = strtol(p, &q, 10);
+		else
+			n = 0; /* shut up compiler */
+		if(p == nil || p == q || *q != '\0'){
+			warn("%s hub delay setting requires numeric delay", cmdstr[cmd]);
 			break;
 		}
 		s->fddelay[cmd-Err] = n;
-		fprint(2, "hubshell: %s hub delay set to %ld\n", cmdstr[cmd], n);
+		warn("%s hub delay set to %ld", cmdstr[cmd], n);
 		break;
 	case Fortun:	/* %fortun and %echoes turn on buffer flush commands %unfort and %unecho deactivate */
-		fprint(2, "hubshell: fortunes active\n");
+		warn("fortunes active");
 		fortunate = 1;
 		break;
 	case Unfort:
-		fprint(2, "hubshell: fortunes deactivated\n");
+		warn("fortunes deactivated");
 		fortunate = 0;
 		break;
 	case Echoes:
-		fprint(2, "hubshell: echoes active\n");
+		warn("echoes active");
 		echoes = 1;
 		break;
 	case Unecho:
-		fprint(2, "hubshell: echoes deactivated\n");
+		warn("echoes deactivated");
 		echoes = 0;
 		break;
 	case Eof:	/* send eof or freeze/melt/fear/calm/trunc/notrunc messages to ctl file */
@@ -362,55 +430,51 @@ parsebuf(Shell *s, char *buf, int outfd)
 	case Trunc:
 	case Notrunc:
 		if((ctlfd = open(ctlname, OWRITE)) < 0){
-			fprint(2, "hubshell: can't open ctl file\n");
+			warn("can't open ctl file");
 			break;
 		}
-		sprint(ctlbuf, "%s %s\n", cmdstr[cmd], basehub);
-		n = strlen(ctlbuf);
+		n = snprint(ctlbuf, sizeof(ctlbuf), "%s %s\n", cmdstr[cmd], basehub);
 		if(write(ctlfd, ctlbuf, n) != n)
-			fprint(2, "hubshell: error writing to %s on fd %d\n", ctlname, ctlfd);
+			warn("error writing to %s on fd[%d]: %r", ctlname, ctlfd);
 		close(ctlfd);
 		break;
 	case List:	/* %list displays attached hubs %status reports variable settings */
-		sprint(tmpstr, "/n/%s", srvname);
-		print("listing mounted hubfs at /n/%s\n", srvname);
-		if(rfork(RFPROC|RFNOTEG|RFNOWAIT) == 0){
-			execl("/bin/lc", "lc", tmpstr, 0);
+		warn("listing mounted hubfs at %s", mtpt);
+		if((n = rfork(RFPROC|RFNOTEG|RFNOWAIT)) == 0){
+			execl("/bin/lc", "lc", mtpt, 0);
 			sysfatal("execl: %r");
-		}
+		} else if(n < 0)
+			warn("rfork: %r");
 		break;
 	case Status:
-		print("\tHubshell attached to mounted %s of /srv/%s\n"
-			"\tfdzero delay: %ld  fdone delay: %ld  fdtwo delay: %ld\n"
-			, s->basename, srvname, s->fddelay[0], s->fddelay[1], s->fddelay[2]);
-		if(fortunate)
-			print("\tfortune fd flush active\n");
-		if(echoes)
-			print("\techo fd flush active\n");
+		fprint(2, "\t%s status: attached to mounted %s of /srv/%s\n"
+			"\tfd[0] delay: %ld  fd[1] delay: %ld  fd[2] delay: %ld\n"
+			, argv0, s->basename, srvname, s->fddelay[0], s->fddelay[1], s->fddelay[2]);
+		if(fortunate) fprint(2, "\tfortune fd flush active\n");
+		if(echoes) fprint(2, "\techo fd flush active\n");
 		break;
 	case Quit:
-		if((ctlfd = open(ctlname, OWRITE)) < 0){
-			fprint(2, "hubshell: can't open ctl file\n");
-			break;
-		}
-		sprint(ctlbuf, "%s %s\n", cmdstr[cmd], basehub);
-		n = strlen(ctlbuf);
-		if(write(ctlfd, ctlbuf, n) != n)
-			fprint(2, "hubshell: error writing to %s on fd %d\n", ctlname, ctlfd);
-		close(ctlfd);
+		if((ctlfd = open(ctlname, OWRITE)) >= 0){
+			n = snprint(ctlbuf, sizeof(ctlbuf), "%s %s\n", cmdstr[cmd], basehub);
+			if(write(ctlfd, ctlbuf, n) != n)
+				warn("error writing to %s on fd[%d]: %r", ctlname, ctlfd);
+			close(ctlfd);
+		} else
+			warn("can't open ctl file: %r");
 		s->shellctl = 'q';
-		closefds(s);
+		freeshell(s);
 		exits(nil);
 	default:	/* no matching command found, print list of commands as reminder */
-		fprint(2, "hubshell %% commands: \n\tdetach, remote NAME, local NAME, attach NAME \n\tstatus, list, err TIME, in TIME, out TIME\n\tfortun unfort echoes unecho trunc notrunc eof\n");
-		s->cmdresult = 'x';
+		warn("%% commands: \n\tdetach, remote NAME, local NAME, attach NAME \n\tstatus, list, err TIME, in TIME, out TIME\n\tfortun unfort echoes unecho trunc notrunc eof");
+		return 0;
 	}
-	fprint(2, "io: ");
+	write(2, prompt, promptlen);
+	return 1;
 }
 
 /* receive interrupt messages (delete key) and pass them through to attached shells */
 int
-sendinterrupt(void *regs, char *notename)
+sendinterrupt(void*, char *notename)
 {
 	char notehub[SMBUF];
 	int notefd;
@@ -418,45 +482,64 @@ sendinterrupt(void *regs, char *notename)
 	if(strcmp(notename, "interrupt") != 0)
 		return 0;
 	notereceived = 1;
-	if(regs == nil)		/* this is just to shut up a compiler warning */
-		fprint(2, "error in note registers\n");
-	sprint(notehub, "%s%s.note", hubdir, basehub);
+	snprint(notehub, sizeof(notehub), "%s/%s.note", mtpt, basehub);
 	if((notefd = open(notehub, OWRITE)) < 0){
-		fprint(2, "can't open %s\n", notehub);
+		warn("can't open %s", notehub);
 		return 1;
 	}
-	fprint(notefd, "interrupt");
+	write(notefd, notename, strlen(notename));
 	close(notefd);
 	return 1;
 }
 
 void
-main(int argc, char *argv[])
+killfamily(void)
+{
+	if(cpid != -1){
+		postnote(PNGROUP, cpid, "die");
+		cpid = -1;
+	}
+}
+
+void
+main(int argc, char **argv)
 {
 	Shell *s;
+	char *p;
 
-	if(argc != 2){
-		fprint(2, "usage: hubshell hubsname - and probably you want the hub wrapper script instead\n");
+	strcpy(shellname, "io");
+	strcpy(srvname, "hubfs");
+	ARGBEGIN{
+	}ARGEND;
+	switch(argc){
+	case 2: strncpy(shellname, argv[1], sizeof(shellname));
+	case 1: strncpy(srvname, argv[0], sizeof(srvname));
+	case 0: break;
+	default:
+		fprint(2, "usage: %s [srvname [shellname]]\n", argv0);
 		exits("usage");
 	}
 
 	notereceived = 0;
 	fortunate = 0;
-	echoes = 0;		/* default changed to no echoes */
+	echoes = 0;
 
-	/* parse initname and set srvname hubdir and ctlname from it */
-	strncpy(initname, argv[1], SMBUF);
-	strncat(srvname, initname+3, SMBUF);
-	sprint(srvname + strcspn(srvname, "/"), "\0");
-	sprint(hubdir, "/n/");
-	strncat(hubdir, srvname, SMBUF-6);
-	strcat(hubdir, "/");
-	sprint(ctlname, "/n/");
-	strncat(ctlname, srvname, SMBUF-6);
-	strcat(ctlname, "/ctl");
+	if(p = getenv("prompt"))
+		prompt = p;
+	promptlen = strlen(prompt);
+
+	if((p = strrchr(srvname, '/')) == nil)
+		p = srvname;
+	else
+		p++;
+	snprint(mtpt, sizeof(mtpt), "/n/%s", p);
+	snprint(ctlname, sizeof(ctlname), "%s/ctl", mtpt);
+
+	if((s = setupshell(shellname)) == nil)
+		sysfatal("setupshell() failed, bailing out");
 
 	atnotify(sendinterrupt, 1);
-	if((s = setupshell(initname)) == nil)
-		sysfatal("couldnt setup shell, bailing out");
+	cpid = -1;
+	atexit(killfamily);
 	startshell(s);
 }

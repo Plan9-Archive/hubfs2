@@ -27,7 +27,6 @@ enum buffersizes{
 
 typedef struct Hub	Hub;		/* A Hub file is a multiplexed pipe-like data buffer */
 typedef struct Msgq	Msgq;		/* Client fid structure to track location */
-typedef struct Hublist Hublist;	/* Linked list of hubs */
 
 struct Hub{
 	char name[SMBUF];			/* name */
@@ -52,6 +51,7 @@ struct Hub{
 	vlong bp;					/* Bytes per second that can be written */
 	vlong st;					/* minimum separation time between messages in ns */
 	vlong rt;					/* Interval in seconds for resetting limit timer */
+	Hub *next;					/* Next hub in list */
 };
 
 struct Msgq{
@@ -60,16 +60,10 @@ struct Msgq{
 	int bufuse;					/* how much of the buffer has been used */
 };
 
-struct Hublist{
-	Hub *targethub;				/* Hub referenced by this entry */
-	char *hubname;				/* Name of referenced Hub */
-	Hublist *nexthub;			/* Pointer to next Hublist entry in list */
-};
-
-Hublist *firsthublist;			/* Pointer to start of linked list of hubs */
-Hublist *lasthublist;			/* Pointer to list entry for next hub to be created */
 char *srvname;					/* Name of this hubfs service */
-int numhubs;					/* Total number of hubs in existence */
+Hub *firsthub;
+Hub *lasthub;
+int nhubs;						/* Total number of hubs in existence */
 int paranoia;					/* Paranoid mode maintains loose reader/writer sync */
 int freeze;						/* In frozen mode the hubs operate simply as a ramfs */
 int trunc;						/* In trunc mode only new data is sent, not buffered */
@@ -83,17 +77,19 @@ u32int maxmsglen;				/* Maximum message length accepted */
 uvlong bucksize;					/* Size of data bucket per hub */
 
 static char Ebad[] = "something bad happened";
+static char Ebadctl[] = "bad ctl message";
 static char Enomem[] = "no memory";
+static char Etoomany[] = "too many hubs";
 
-void wrsend(Hub *h);
-void msgsend(Hub *h);
-void hubcmd(char *cmd);
-void setuphub(Hub *h);
-void addhub(Hub *h);
-void removehub(Hub *h);
-void eofall(void);
-void eofhub(char *target);
-int flushcheck(Hub *h, Req *r);
+void wrsend(Hub*);
+void msgsend(Hub*);
+char* hubctl(char*);
+void setuphub(Hub*);
+void addhub(Hub*);
+void unlinkhub(Hub*);
+char* eofhub(char*);
+void hubqueue(Hub*, Req*);
+int flushinated(Hub*, Req*);
 
 void fsread(Req *r);
 void fswrite(Req *r);
@@ -274,60 +270,59 @@ wrsend(Hub *h)
 	}
 }
 
+void
+hubqueue(Hub *h, Req *r)
+{
+	if(h->qrnum >= MAXQ-2){
+		memmove(h->qreads+1, h->qreads+h->qrans, h->qrnum - h->qrans);
+		memmove(h->rstatus+1, h->rstatus+h->qrans, h->qrnum - h->qrans);
+		h->qrnum = h->qrnum - h->qrans + 1;
+		h->qrans = 1;
+	}
+	h->qrnum++;
+	h->rstatus[h->qrnum] = WAIT;
+	h->qreads[h->qrnum] = r;
+}
+
 /* queue all reads unless Hubs are set to freeze */
 void
 fsread(Req *r)
 {
+	char *err;
 	Hub *h;
 	Msgq *mq;
-	u32int count;
+	u32int count, n;
 	vlong offset;
 	char tmpstr[2*SMBUF];
-	int i;
-	int j;
 
 	h = r->fid->file->aux;
-
+	err = nil;
 	if(strncmp(h->name, "ctl", 3) == 0){
-		count = r->ifcall.count;
-		offset = r->ifcall.offset;
-		if(offset > 0){
+		if(r->ifcall.offset > 0){
 			r->ofcall.count = 0;
-			respond(r, nil);
+		done:
+			respond(r, err);
 			return;
 		}
-		snprint(tmpstr, 2*SMBUF-1, "\tHubfs %s status (1 is active, 0 is inactive):\n \
-Paranoia == %d  Freeze == %d  Trunc == %d  Applylimits == %d\n \
-Buffersize == %ulld \n", srvname, paranoia, freeze, trunc, applylimits, bucksize);
-		if(strlen(tmpstr) <= count)
-			count = strlen(tmpstr);
-		else{
-			respond(r, "read count too small to answer");
-			return;
+		snprint(tmpstr, sizeof(tmpstr),
+			"\tHubfs %s status (1 is active, 0 is inactive):\n"
+			"Paranoia == %d  Freeze == %d  Trunc == %d  Applylimits == %d\n"
+			"Buffersize == %ulld\n"
+			, srvname, paranoia, freeze, trunc, applylimits, bucksize);
+		if((n = strlen(tmpstr)) > r->ifcall.count){
+			err = "read too small for response";
+			goto done;
 		}
-		memmove(r->ofcall.data, tmpstr, count);
-		r->ofcall.count = count;
-		respond(r, nil);
-		return;
+		memmove(r->ofcall.data, tmpstr, n);
+		r->ofcall.count = n;
+		goto done;
 	}
 
 	/* In freeze mode hubs behave as ramdisk files */
 	if(freeze == UP){
 		mq = r->fid->aux;
 		if(mq->bufuse > 0){
-			if(h->qrnum >= MAXQ - 2){
-				j = 1;
-				for(i = h->qrans; i <= h->qrnum; i++) {
-					h->qreads[j] = h->qreads[i];
-					h->rstatus[j] = h->rstatus[i];
-					j++;
-				}
-				h->qrnum = h->qrnum - h->qrans + 1;
-				h->qrans = 1;
-			}
-			h->qrnum++;
-			h->rstatus[h->qrnum] = WAIT;
-			h->qreads[h->qrnum] = r;
+			hubqueue(h, r);
 			return;
 		}
 		count = r->ifcall.count;
@@ -336,31 +331,16 @@ Buffersize == %ulld \n", srvname, paranoia, freeze, trunc, applylimits, bucksize
 			offset -= bucksize;
 		if(offset >= h->buckfull){
 			r->ofcall.count = 0;
-			respond(r, nil);
-			return;
+			goto done;
 		}
 		if((offset + count >= h->buckfull) && (offset < h->buckfull))
 			count = h->buckfull - offset;
 		memmove(r->ofcall.data, h->bucket + offset, count);
 		r->ofcall.count = count;
-		respond(r, nil);
-		return;
+		goto done;
 	}
 
-	/* Actual queue logic, ctl file and freeze mode logic is rarely used */
-	if(h->qrnum >= MAXQ - 2){
-		j = 1;
-		for(i = h->qrans; i <= h->qrnum; i++) {
-			h->qreads[j] = h->qreads[i];
-			h->rstatus[j] = h->rstatus[i];
-			j++;
-		}
-		h->qrnum = h->qrnum - h->qrans + 1;
-		h->qrans = 1;
-	}
-	h->qrnum++;
-	h->rstatus[h->qrnum] = WAIT;
-	h->qreads[h->qrnum] = r;
+	hubqueue(h, r);
 	msgsend(h);
 }
 
@@ -368,17 +348,20 @@ Buffersize == %ulld \n", srvname, paranoia, freeze, trunc, applylimits, bucksize
 void
 fswrite(Req *r)
 {
+	char *err;
 	Hub *h;
 	u32int count;
 	vlong offset;
-	int i;
-	int j;
+	int i, j;
 
 	h = r->fid->file->aux;
-	if(strncmp(h->name, "ctl", 3) == 0)
-		hubcmd(r->ifcall.data);
-
-	if(freeze == UP){
+	err = nil;
+	if(strncmp(h->name, "ctl", 3) == 0){
+		err = hubctl(r->ifcall.data);
+	done:
+		respond(r, err);
+		return;
+	} else if(freeze == UP){
 		count = r->ifcall.count;
 		offset = r->ifcall.offset;
 		while(offset >= bucksize)
@@ -394,8 +377,7 @@ fswrite(Req *r)
 		h->buckfull += count;
 		r->fid->file->length = h->buckfull;
 		r->ofcall.count = count;
-		respond(r, nil);
-		return;
+		goto done;
 	}
 
 	/* Actual queue logic here */
@@ -424,25 +406,25 @@ fscreate(Req *r)
 {
 	Hub *h;
 	File *f;
+	char *err;
 
-	if(numhubs > MAXHUBS){
-		fprint(2, "Too many hubs created\n");
-		respond(r, Ebad);
-		return;
-	}
-	if(f = createfile(r->fid->file, r->ifcall.name, r->fid->uid, r->ifcall.perm, nil)){
-		numhubs++;
-		h = (Hub*)emalloc9p(sizeof(Hub));
+	err = nil;
+	if(nhubs >= MAXHUBS){
+		err = Etoomany;
+	} else if(f = createfile(r->fid->file, r->ifcall.name, r->fid->uid, r->ifcall.perm, nil)){
+		nhubs++;
+		h = emalloc9p(sizeof(*h));
 		setuphub(h);
-		addhub(h);
-		strncat(h->name,r->ifcall.name,SMBUF-1);
+		lasthub->next = h;
+		lasthub = h;
+		strncat(h->name, r->ifcall.name, SMBUF);
 		f->aux = h;
 		r->fid->file = f;
 		r->ofcall.qid = f->qid;
-		respond(r, nil);
-		return;
-	}
-	respond(r, Ebad);
+	} else
+		err = Ebad;
+
+	respond(r, err);
 }
 
 /* new client for the hubfile, create new message queue with client fid */
@@ -457,7 +439,7 @@ fsopen(Req *r)
 		respond(r, nil);
 		return;
 	}
-	q = (Msgq*)emalloc9p(sizeof(Msgq));
+	q = emalloc9p(sizeof(*q));
 
 	q->myfid = r->fid->fid;
 	q->nxt = h->bucket;
@@ -481,25 +463,18 @@ fsopen(Req *r)
 void
 fsflush(Req *r)
 {
-	Hublist *currenthub;
-	int flushed;
+	Hub *h;
 
-	currenthub = firsthublist;
-	flushed = flushcheck(currenthub->targethub, r);
-	if(flushed)
-		return;
-	while(currenthub->nexthub->targethub != nil){
-		currenthub=currenthub->nexthub;
-		flushed = flushcheck(currenthub->targethub, r);
-		if(flushed)
+	for(h = firsthub->next; h != nil; h = h->next)
+		if(flushinated(h, r))
 			return;
-	}
+
 	respond(r, nil);
 }
 
 /* check a hub to see if it contains a pending Req with matching tag */
 int
-flushcheck(Hub *h, Req *r)
+flushinated(Hub *h, Req *r)
 {
 	Req *tr;
 	int i;
@@ -541,11 +516,10 @@ fsdestroyfile(File *f)
 {
 	Hub *h;
 
-	numhubs--;
-	h = f->aux;
-	if(h){
-		removehub(h);
-		if(applylimits)
+	if(h = f->aux){
+		nhubs--;
+		unlinkhub(h);
+		if(h->lp)
 			free(h->lp);
 		free(h->bucket);
 		free(h);
@@ -557,7 +531,7 @@ fsdestroyfile(File *f)
 void
 setuphub(Hub *h)
 {
-	h->bucket = (char*)emalloc9p(bucksize);
+	h->bucket = emalloc9p(bucksize);
 	h->inbuckp = h->bucket;
 	h->qrnum = 0;
 	h->qrans = 1;
@@ -574,209 +548,220 @@ setuphub(Hub *h)
 	}
 }
 
-/* add a new hub to the linked list of hubs */
-void
-addhub(Hub *h)
-{
-	lasthublist->targethub = h;
-	lasthublist->hubname = h->name;
-	lasthublist->nexthub = (Hublist*)emalloc9p(sizeof(Hublist)); /* keep an empty */
-	lasthublist = lasthublist->nexthub;
-	lasthublist->nexthub = nil;
-	lasthublist->targethub = nil;
-}
-
 /* remove a hub about to be deleted from the linked list of hubs */
 void
-removehub(Hub *h)
+unlinkhub(Hub *th)
 {
-	Hublist* currenthub;
+	Hub *h, *lh;
 
-	currenthub = firsthublist;
-	if(currenthub->targethub = h){
-		if(currenthub->nexthub != nil)
-			firsthublist = currenthub->nexthub;
-		free(currenthub);
-		return;
+	lh = nil;
+	h = firsthub;
+	while(h != nil && h != th){
+		lh = h;
+		h = h->next;
 	}
-	while(currenthub->nexthub->targethub != nil){
-		if(currenthub->nexthub->targethub = h){
-			currenthub->nexthub = currenthub->nexthub->nexthub;
-			free(currenthub->nexthub);
-			return;
-		}
-		currenthub=currenthub->nexthub;
+
+	if(h == th)
+		lh->next = h->next;
+}
+
+enum{
+	Calm,
+	Fear,
+	Freeze,
+	Melt,
+	Trunc,
+	Notrunc,
+	Eof,
+	Quit,
+	NCmd,
+};
+
+char *cmdstr[] = {
+	[Quit] = "quit",
+	[Fear] = "fear",
+	[Calm] = "calm",
+	[Freeze] = "freeze",
+	[Melt] = "melt",
+	[Trunc] = "trunc",
+	[Notrunc] = "notrunc",
+	[Eof] = "eof",
+	[NCmd] = nil,
+};
+
+int
+getcmd(char *s)
+{
+	int i;
+
+	for(i=0; i<NCmd; i++){
+		if(strncmp(cmdstr[i], s, strlen(cmdstr[i])) == 0)
+			break;
 	}
+
+	return i;
 }
 
 /* issue eofs or set status of paranoid mode and frozen/normal from ctl messages */
-void
-hubcmd(char *cmd)
+char*
+hubctl(char *buf)
 {
-	int i;
-	char cmdbuf[256];
+	int cmd, cmdlen;
+	char *p, *q;
 
-	if(strncmp(cmd, "quit", 4) == 0)
-		sysfatal("hubfs: quit command received");
-	if(strncmp(cmd, "fear", 4) == 0){
-		paranoia = UP;
-		fprint(2, "hubfs: paranoid mode activated\n");
-		return;
-	}
-	if(strncmp(cmd, "calm", 4) == 0){
-		paranoia = DOWN;
-		fprint(2, "hubfs: non-paranoid mode resumed\n");
-		return;
-	}
-	if(strncmp(cmd, "freeze", 6) == 0){
-		freeze = UP;
-		fprint(2, "hubfs: the pipes freeze in place\n");
-		return;
-	}
-	if(strncmp(cmd, "melt", 4) == 0){
-		freeze = DOWN;
-		fprint(2, "hubfs: the pipes thaw\n");
-		return;
-	}
-	if(strncmp(cmd, "trunc", 5) == 0){
-		trunc = UP;
-		fprint(2, "trunc mode set\n");
-		return;
-	}
-	if(strncmp(cmd, "notrunc", 7) == 0){
-		trunc = DOWN;
-		fprint(2, "trunc mode off\n");
-		return;
+	cmd = getcmd(buf);
+	if(cmd != NCmd){
+		if(p = strchr(buf, '\n'))
+			*p = '\0';
+		cmdlen = strlen(cmdstr[cmd]);
+		p = buf+cmdlen;
+		if(*p != '\0'){
+			while(*p == ' ' || *p == '\t')
+				p++;
+			if(*p != '\0'){
+				if(q = strstr(p, " \t"))
+					*q = '\0';
+			} else
+				p = nil;
+		} else
+			p = nil;
+	} else
+		p = nil;
+	switch(cmd){
+	case Calm: paranoia = UP; break;
+	case Fear: paranoia = DOWN; break;
+	case Freeze: freeze = UP; break;
+	case Melt: freeze = DOWN; break;
+	case Trunc: trunc = UP; break;
+	case Notrunc: trunc = DOWN; break;
+	case Quit: exits("");
+	case Eof: return eofhub(p);
+	default:
+		return Ebadctl;
 	}
 
-	/* eof command received, check if it applies to single hub then dispatch */
-	if(strncmp(cmd, "eof", 3) == 0){
-		endoffile = UP;
-		if(strlen(cmd) > 4){
-			i=0;
-			while(isalnum(*(cmd+i+4))){
-				cmdbuf[i]=*(cmd+i+4);
-				i++;
-			}
-			cmdbuf[i] = '\0';
-			eofhub(cmdbuf);
-			endoffile = DOWN;
-			return;
-		}
-		fprint(2, "hubfs: sending end of file to all client readers\n");
-		eofall();
-		endoffile = DOWN;
-		return;
-	}
-	fprint(2, "hubfs: no matching command found\n");
+	return nil;
 }
 
 /* send eof to specific named hub */
-void
-eofhub(char *target){
-	Hublist *currenthub;
+char*
+eofhub(char *s){
+	Hub *h;
+	char *err;
 
-	currenthub = firsthublist;
-	if(currenthub->targethub == nil)
-		return;
-	if(strcmp(target, currenthub->hubname) == 0){
-		fprint(2, "hubfs: eof to %s\n", currenthub->hubname);
-		msgsend(currenthub->targethub);
-		return;
+	fprint(2, "eof: %s\n", s);
+	err = nil;
+	endoffile = UP;
+	for(h = firsthub; h != nil; h = h->next){
+		if(s != nil){
+			if(strcmp(s, h->name) == 0){
+				msgsend(h);
+				break;
+			}
+		} else
+			msgsend(h);
 	}
-	while(currenthub->nexthub->targethub != nil){
-		currenthub=currenthub->nexthub;
-		if(strcmp(target, currenthub->hubname) == 0){
-			fprint(2, "hubfs: eof to %s\n", currenthub->hubname);
-			msgsend(currenthub->targethub);
-			return;
-		}
-	}
-}
+	if(h == nil && s != nil)
+		err = "hub not found";
 
-/* send eof to all hub readers */
-void
-eofall(){
-	Hublist *currenthub;
-
-	currenthub = firsthublist;
-	if(currenthub->targethub == nil)
-		return;
-	msgsend(currenthub->targethub);
-	while(currenthub->nexthub->targethub != nil){
-		currenthub=currenthub->nexthub;
-		msgsend(currenthub->targethub);
-	}
+	endoffile = DOWN;
+	return err;
 }
 
 void
 usage(void)
 {
-	fprint(2, "usage: hubfs [-D] [-t] [-q bucketsize] [-b bytespersec] \
-[-i nsbetweenmsgs] [-r timerreset] [-l maxmsglen] [-s srvname] [-m mtpt]\n");
+	fprint(2,
+		"usage: %s [-Dtz] [-q bktsize] [-b B/s]"
+		" [-i nsmsg] [-r timerreset] [-l maxmsglen]"
+		" [-s srvname] [-m mtpt]\n"
+		, argv0);
 	exits("usage");
+}
+
+long
+estrtol(char *as, char **aas, int base)
+{
+	long n;
+	char *p;
+
+	n = strtol(as, &p, base);
+	if(p == as)
+		sysfatal("estrtol: bad input '%s'", as);
+	else if(aas != nil)
+		*aas = p;
+
+	return n;
+}
+
+uvlong
+estrtoull(char *as, char **aas, int base)
+{
+	uvlong n;
+	char *p;
+
+	n = strtoull(as, &p, base);
+	if(p == as)
+		sysfatal("estrtoull: bad input '%s'", as);
+	else if(aas != nil)
+		*aas = p;
+
+	return n;
 }
 
 void
 main(int argc, char **argv)
 {
-	char *addr = nil;
-	char *mtpt = nil;
+	int fd;
+	char *addr;
+	char *mtpt;
 	char *bps, *rst, *len, *spi, *qua;
-	Qid q;
-	srvname = nil;
+	char *srvname;
+
 	paranoia = DOWN;
 	freeze = DOWN;
 	trunc = DOWN;
 	allowzap = DOWN;
 	endoffile = DOWN;
 	applylimits = DOWN;
-	numhubs = 0;
-	bytespersecond = 1073741824;
+	nhubs = 0;
+	bytespersecond = 1024*1024*1024;
 	separationinterval = 1;
 	resettime =  60;
 	maxmsglen = 666666;
 	bucksize = 777777;
 
 	fs.tree = alloctree(nil, nil, DMDIR|0777, fsdestroyfile);
-	q = fs.tree->root->qid;
 
+	addr = nil;
+	mtpt = nil;
+	srvname = nil;
 	ARGBEGIN{
 	case 'D':
 		chatty9p++;
 		break;
 	case 'q':
-		qua = ARGF();
-		if (qua == nil)
-			usage();
-		bucksize = strtoull(qua, 0 , 10);
+		qua = EARGF(usage());
+		bucksize = estrtoull(qua, 0 , 10);
 		break;
 	case 'b':
-		bps = ARGF();
-		if (bps == nil)
-			usage();
-		bytespersecond = strtoull(bps, 0, 10);
+		bps = EARGF(usage());
+		bytespersecond = estrtoull(bps, 0, 10);
 		applylimits = UP;
 		break;
 	case 'i':
-		spi = ARGF();
-		if (spi == nil)
-			usage();
-		separationinterval = strtoull(spi, 0, 10);
+		spi = EARGF(usage());
+		separationinterval = estrtoull(spi, 0, 10);
 		applylimits = UP;
 		break;
 	case 'r':
-		rst = ARGF();
-		if (rst == nil)
-			usage();
-		resettime = strtoull(rst, 0, 10);
+		rst = EARGF(usage());
+		resettime = estrtoull(rst, 0, 10);
 		applylimits = UP;
 		break;
 	case 'l':
-		len = ARGF();
-		if (len == nil)
-			usage();
-		maxmsglen = atoi(len);
+		len = EARGF(usage());
+		maxmsglen = estrtol(len, 0, 10);
 		break;
 	case 'a':
 		addr = EARGF(usage());
@@ -796,7 +781,6 @@ main(int argc, char **argv)
 	default:
 		usage();
 	}ARGEND;
-
 	if(argc)
 		usage();
 	if(chatty9p)
@@ -804,12 +788,15 @@ main(int argc, char **argv)
 	if(addr == nil && srvname == nil && mtpt == nil)
 		sysfatal("must specify -a, -s, or -m option");
 
-	/* start with an allocated but empty first Hublist entry */
-	lasthublist = (Hublist*)emalloc9p(sizeof(Hublist));
-	lasthublist->targethub = nil;
-	lasthublist->hubname = nil;
-	lasthublist->nexthub = nil;
-	firsthublist = lasthublist;
+	/* start with an allocated but empty Hub */
+	firsthub = emalloc9p(sizeof(*firsthub));
+	lasthub = firsthub;
+
+	close(0);
+	if((fd = open("/dev/null", ORDWR)) != 0)
+		sysfatal("open returned %d: %r", fd);
+	if((fd = dup(0, 1)) != 1)
+		sysfatal("dup returned %d: %r", fd);
 
 	if(addr)
 		listensrv(&fs, addr);
