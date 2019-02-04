@@ -2,6 +2,7 @@
 
 BIN=/$objtype/bin
 MAN=/sys/man/4
+MANFILES=hubfs.man
 
 TARG=\
 	hubfs\
@@ -18,10 +19,9 @@ $O.hubfs: hubfs.$O ratelimit.$O
 $O.hubshell: hubshell.$O
 	$LD $LDFLAGS -o $target $prereq
 
-install:V: install.rc
-	for (i in $TARG)
-		mk $MKFLAGS $i.install
+/rc/bin/%:	%.rc
+	cp $stem.rc $target
 
-install.rc:V:
-	if(! test -e /rc/bin/hub)
-		cp hub.rc /rc/bin/hub
+install.rc:V: /rc/bin/hub
+
+install:V: install.rc
