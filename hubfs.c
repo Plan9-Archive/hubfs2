@@ -10,15 +10,7 @@
 /* input/output multiplexing and buferring */
 /* often used in combination with hubshell client and hub wrapper script */
 
-/* Flags track the state of queued 9p requests and ketchup/wait in paranoid mode */
-enum flags{
-	DOWN = 0,
-	UP = 1,
-	WAIT = 2,
-	DONE = 3,
-};
-
-enum buffersizes{
+enum {
 	MAGIC = 77777,				/* In paranoid mode let readers lag this many bytes */
 	MAXQ = 777,					/* Maximum number of 9p requests to queue */
 	SMBUF = 777,				/* Buffer for names and other small strings */
@@ -35,18 +27,18 @@ struct Hub{
 	int buckfull;				/* amount of data stored in bucket */
 	char *buckwrap;				/* exact limit of written data before pointer reset */
 	Req *qreads[MAXQ];			/* pointers to queued read Reqs */
-	int rstatus[MAXQ];			/* status of read requests */
+	int rwaiting[MAXQ];			/* status of read requests */
 	int qrnum;					/* index of read Reqs waiting to be filled */
 	int qrans;					/* number of read Reqs answered */
 	Req *qwrites[MAXQ];			/* Similar for write Reqs */
-	int wstatus[MAXQ];
+	int wwaiting[MAXQ];
 	int qwnum;
 	int qwans;
 	int ketchup;				/* lag of readers vs. writers in paranoid mode */
 	int tomatoflag;				/* readers use tomatoflag to tell writers to wait */
 	QLock wrlk;					/* writer lock during fear */
 	QLock replk;				/* reply lock during fear */
-	int killme;					/* forked processes in paranoid mode need to exit */
+	int suicidal;				/* forked processes in paranoid mode need to exit */
 	Limiter *lp;				/* Pointer to limiter struct for this hub */
 	vlong bp;					/* Bytes per second that can be written */
 	vlong st;					/* minimum separation time between messages in ns */
@@ -64,8 +56,8 @@ char *srvname;					/* Name of this hubfs service */
 Hub *firsthub;
 Hub *lasthub;
 int nhubs;						/* Total number of hubs in existence */
-int paranoia;					/* Paranoid mode maintains loose reader/writer sync */
-int freeze;						/* In frozen mode the hubs operate simply as a ramfs */
+int paranoid;					/* Paranoid mode maintains loose reader/writer sync */
+int frozen;						/* When frozen, the hubs operate simply as a ramfs */
 int trunc;						/* In trunc mode only new data is sent, not buffered */
 int allowzap;					/* Determine whether a buffer can be emptied forcibly */
 int endoffile;					/* Send zero length end of file read to all clients */
@@ -137,12 +129,12 @@ msgsend(Hub *h)
 
 	/* loop through queued 9p read requests for this hub and answer if needed */
 	for(i = h->qrans; i <= h->qrnum; i++){
-		if(paranoia == UP)
+		if(paranoid)
 			qlock(&h->replk);
-		if(h->rstatus[i] != WAIT){
+		if(! h->rwaiting[i]){
 			if((i == h->qrans) && (i < h->qrnum))
 				h->qrans++;
-			if(paranoia == UP)
+			if(paranoid)
 				qunlock(&h->replk);
 			continue;
 		}
@@ -151,11 +143,11 @@ msgsend(Hub *h)
 		r = h->qreads[i];
 		mq = r->fid->aux;
 		if(mq->nxt == h->inbuckp){
-			if(paranoia == UP)
+			if(paranoid)
 				qunlock(&h->replk);
-			if(endoffile == UP){
+			if(endoffile){
 				r->ofcall.count = 0;
-				h->rstatus[i] = DONE;
+				h->rwaiting[i] = 0;
 				if((i == h->qrans) && (i < h->qrnum))
 					h->qrans++;
 				respond(r, nil);
@@ -182,17 +174,17 @@ msgsend(Hub *h)
 		r->ofcall.count = count;
 		mq->nxt += count;
 		mq->bufuse += count;
-		h->rstatus[i] = DONE;
+		h->rwaiting[i] = 0;
 		if((i == h->qrans) && (i < h->qrnum))
 			h->qrans++;
 		respond(r, nil);
 
-		if(paranoia == UP){
+		if(paranoid){
 			h->ketchup = mq->bufuse;
 			if(mq->bufuse <= h->buckfull)
-				h->tomatoflag = DOWN;	/* DOWN means do not wait for us */
+				h->tomatoflag = 0;	/* do not wait for us */
 			else
-				h->tomatoflag = UP;
+				h->tomatoflag = 1;
 			qunlock(&h->replk);
 		}
 	}
@@ -211,13 +203,13 @@ wrsend(Hub *h)
 		return;
 
 	/* in paranoid mode we fork and slack off while the readers catch up */
-	if(paranoia == UP){
+	if(paranoid){
 		qlock(&h->wrlk);
 		if((h->ketchup < h->buckfull - MAGIC) || (h->ketchup > h->buckfull)){
 			if(rfork(RFPROC|RFMEM) == 0){
 				sleep(100);
-				h->killme = UP;
-				for(j = 0; ((j < 77) && (h->tomatoflag == UP)); j++)
+				h->suicidal = 1;
+				for(j = 0; ((j < 77) && (h->tomatoflag)); j++)
 					sleep(7);		/* Give readers time to catch up */
 			} else
 				return;	/* This branch should become a read request */
@@ -226,7 +218,7 @@ wrsend(Hub *h)
 
 	/* loop through queued 9p write requests for this hub */
 	for(i = h->qwans; i <= h->qwnum; i++){
-		if(h->wstatus[i] != WAIT){
+		if(! h->wwaiting[i]){
 			if((i == h->qwans) && (i < h->qwnum))
 				h->qwans++;
 			continue;
@@ -251,19 +243,19 @@ wrsend(Hub *h)
 		h->buckfull += count;
 		r->fid->file->length = h->buckfull;
 		r->ofcall.count = count;
-		h->wstatus[i] = DONE;
+		h->wwaiting[i] = 0;
 		if((i == h->qwans) && (i < h->qwnum))
 			h->qwans++;
 		if(applylimits)
 			limit(h->lp, count);
 		respond(r, nil);
 
-		if(paranoia == UP){
+		if(paranoid){
 			if(h->wrlk.locked == 1)
 				qunlock(&h->wrlk);
-			/* If killme is up we forked another flow of control, so exit */
-			if(h->killme == UP){
-				h->killme = DOWN;
+			/* If suicidal we forked another flow of control, so exit */
+			if(h->suicidal){
+				h->suicidal = 0;
 				exits(nil);
 			}
 		}
@@ -275,16 +267,16 @@ hubqueue(Hub *h, Req *r)
 {
 	if(h->qrnum >= MAXQ-2){
 		memmove(h->qreads+1, h->qreads+h->qrans, h->qrnum - h->qrans);
-		memmove(h->rstatus+1, h->rstatus+h->qrans, h->qrnum - h->qrans);
+		memmove(h->rwaiting+1, h->rwaiting+h->qrans, h->qrnum - h->qrans);
 		h->qrnum = h->qrnum - h->qrans + 1;
 		h->qrans = 1;
 	}
 	h->qrnum++;
-	h->rstatus[h->qrnum] = WAIT;
+	h->rwaiting[h->qrnum] = 1;
 	h->qreads[h->qrnum] = r;
 }
 
-/* queue all reads unless Hubs are set to freeze */
+/* queue all reads unless Hubs are frozen */
 void
 fsread(Req *r)
 {
@@ -306,9 +298,9 @@ fsread(Req *r)
 		}
 		snprint(tmpstr, sizeof(tmpstr),
 			"\tHubfs %s status (1 is active, 0 is inactive):\n"
-			"Paranoia == %d  Freeze == %d  Trunc == %d  Applylimits == %d\n"
+			"Paranoid == %d  Frozen == %d  Trunc == %d  Applylimits == %d\n"
 			"Buffersize == %ulld\n"
-			, srvname, paranoia, freeze, trunc, applylimits, bucksize);
+			, srvname, paranoid, frozen, trunc, applylimits, bucksize);
 		if((n = strlen(tmpstr)) > r->ifcall.count){
 			err = "read too small for response";
 			goto done;
@@ -318,8 +310,8 @@ fsread(Req *r)
 		goto done;
 	}
 
-	/* In freeze mode hubs behave as ramdisk files */
-	if(freeze == UP){
+	/* In frozen mode hubs behave as ramdisk files */
+	if(frozen){
 		mq = r->fid->aux;
 		if(mq->bufuse > 0){
 			hubqueue(h, r);
@@ -344,7 +336,7 @@ fsread(Req *r)
 	msgsend(h);
 }
 
-/* queue writes unless hubs are set to frozen mode */
+/* queue writes unless hubs are frozen */
 void
 fswrite(Req *r)
 {
@@ -361,7 +353,7 @@ fswrite(Req *r)
 	done:
 		respond(r, err);
 		return;
-	} else if(freeze == UP){
+	} else if(frozen){
 		count = r->ifcall.count;
 		offset = r->ifcall.offset;
 		while(offset >= bucksize)
@@ -385,14 +377,14 @@ fswrite(Req *r)
 		j = 1;
 		for(i = h->qwans; i <= h->qwnum; i++) {
 			h->qwrites[j] = h->qwrites[i];
-			h->wstatus[j] = h->wstatus[i];
+			h->wwaiting[j] = h->wwaiting[i];
 			j++;
 		}
 		h->qwnum = h->qwnum - h->qwans + 1;
 		h->qwans = 1;
 	}
 	h->qwnum++;
-	h->wstatus[h->qwnum] = WAIT;
+	h->wwaiting[h->qwnum] = 1;
 	h->qwrites[h->qwnum] = r;
 	wrsend(h);
 	msgsend(h);
@@ -451,7 +443,7 @@ fsopen(Req *r)
 			r->fid->file->length = 0;
 		}
 	}
-	if (trunc == UP){
+	if(trunc){
 		q->nxt = h->inbuckp;
 		q->bufuse = h->buckfull;
 	}
@@ -480,12 +472,12 @@ flushinated(Hub *h, Req *r)
 	int i;
 
 	for(i = h->qrans; i <= h->qrnum; i++){
-		if(h->rstatus[i] != WAIT)
+		if(! h->rwaiting[i])
 			continue;
 		tr=h->qreads[i];
 		if(tr->tag == r->ifcall.oldtag){
 			tr->ofcall.count = 0;
-			h->rstatus[i] = DONE;
+			h->rwaiting[i] = 0;
 			if((i == h->qrans) && (i < h->qrnum))
 				h->qrans++;
 			respond(tr, nil);
@@ -494,12 +486,12 @@ flushinated(Hub *h, Req *r)
 		}
 	}
 	for(i = h->qwans; i <= h->qwnum; i++){
-		if(h->wstatus[i] != WAIT)
+		if(! h->wwaiting[i])
 			continue;
 		tr=h->qwrites[i];
 		if(tr->tag == r->ifcall.oldtag){
 			tr->ofcall.count = 0;
-			h->wstatus[i] = DONE;
+			h->wwaiting[i] = 0;
 			if((i == h->qwans) && (i < h->qwnum))
 				h->qwans++;
 			respond(tr, nil);
@@ -650,7 +642,7 @@ eofhub(char *s){
 
 	fprint(2, "eof: %s\n", s);
 	err = nil;
-	endoffile = UP;
+	endoffile = 1;
 	for(h = firsthub; h != nil; h = h->next){
 		if(s != nil){
 			if(strcmp(s, h->name) == 0){
@@ -663,7 +655,7 @@ eofhub(char *s){
 	if(h == nil && s != nil)
 		err = "hub not found";
 
-	endoffile = DOWN;
+	endoffile = 0;
 	return err;
 }
 
@@ -714,15 +706,8 @@ main(int argc, char **argv)
 	int fd;
 	char *addr;
 	char *mtpt;
-	char *bps, *rst, *len, *spi, *qua;
+	char *p;
 
-	paranoia = DOWN;
-	freeze = DOWN;
-	trunc = DOWN;
-	allowzap = DOWN;
-	endoffile = DOWN;
-	applylimits = DOWN;
-	nhubs = 0;
 	bytespersecond = 1024*1024*1024;
 	separationinterval = 1;
 	resettime =  60;
@@ -739,27 +724,27 @@ main(int argc, char **argv)
 		chatty9p++;
 		break;
 	case 'q':
-		qua = EARGF(usage());
-		bucksize = estrtoull(qua, 0 , 10);
+		p = EARGF(usage());
+		bucksize = estrtoull(p, 0 , 10);
 		break;
 	case 'b':
-		bps = EARGF(usage());
-		bytespersecond = estrtoull(bps, 0, 10);
-		applylimits = UP;
+		p = EARGF(usage());
+		bytespersecond = estrtoull(p, 0, 10);
+		applylimits = 1;
 		break;
 	case 'i':
-		spi = EARGF(usage());
-		separationinterval = estrtoull(spi, 0, 10);
-		applylimits = UP;
+		p = EARGF(usage());
+		separationinterval = estrtoull(p, 0, 10);
+		applylimits = 1;
 		break;
 	case 'r':
-		rst = EARGF(usage());
-		resettime = estrtoull(rst, 0, 10);
-		applylimits = UP;
+		p = EARGF(usage());
+		resettime = estrtoull(p, 0, 10);
+		applylimits = 1;
 		break;
 	case 'l':
-		len = EARGF(usage());
-		maxmsglen = estrtol(len, 0, 10);
+		p = EARGF(usage());
+		maxmsglen = estrtol(p, 0, 10);
 		break;
 	case 'a':
 		addr = EARGF(usage());
@@ -771,10 +756,10 @@ main(int argc, char **argv)
 		mtpt = EARGF(usage());
 		break;
 	case 't':
-		trunc = UP;
+		trunc = 1;
 		break;
 	case 'z':
-		allowzap = UP;
+		allowzap = 1;
 		break;
 	default:
 		usage();
