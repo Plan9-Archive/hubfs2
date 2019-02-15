@@ -628,8 +628,8 @@ hubctl(char *buf)
 	} else
 		p = nil;
 	switch(cmd){
-	case Calm: paranoia = UP; break;
-	case Fear: paranoia = DOWN; break;
+	case Calm: paranoia = DOWN; break;
+	case Fear: paranoia = UP; break;
 	case Freeze: freeze = UP; break;
 	case Melt: freeze = DOWN; break;
 	case Trunc: trunc = UP; break;
@@ -639,7 +639,6 @@ hubctl(char *buf)
 	default:
 		return Ebadctl;
 	}
-
 	return nil;
 }
 
@@ -716,7 +715,6 @@ main(int argc, char **argv)
 	char *addr;
 	char *mtpt;
 	char *bps, *rst, *len, *spi, *qua;
-	char *srvname;
 
 	paranoia = DOWN;
 	freeze = DOWN;
