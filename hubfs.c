@@ -620,17 +620,18 @@ hubctl(char *buf)
 	} else
 		p = nil;
 	switch(cmd){
-	case Calm: paranoia = DOWN; break;
-	case Fear: paranoia = UP; break;
-	case Freeze: freeze = UP; break;
-	case Melt: freeze = DOWN; break;
-	case Trunc: trunc = UP; break;
-	case Notrunc: trunc = DOWN; break;
+	case Fear: paranoid = 1; break;
+	case Calm: paranoid = 0; break;
+	case Freeze: frozen = 1; break;
+	case Melt: frozen = 0; break;
+	case Trunc: trunc = 1; break;
+	case Notrunc: trunc = 0; break;
 	case Quit: exits("");
 	case Eof: return eofhub(p);
 	default:
 		return Ebadctl;
 	}
+
 	return nil;
 }
 
